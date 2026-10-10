@@ -362,7 +362,8 @@ async function renderStorage() {
   dd.title = kept ? 'El navegador no lo borrará aunque falte espacio' : 'Si el navegador se queda sin espacio podría borrarlo. Instalar la app ayuda a protegerlo.';
 }
 async function loadModel() {
-  const fromCache = !!(await cachedModel());
+  const saved = await cachedModel();
+  const fromCache = !!saved;
   showLoading(fromCache ? 'Abriendo el traductor…' : 'Descargando modelo…', fromCache ? 'Ya está guardado en tu dispositivo' : '', fromCache ? 100 : 0);
   const make = () => new Wllama(WASM, { parallelDownloads: 3, allowOffline: true, suppressNativeLog: true });
   let started = performance.now();
@@ -382,17 +383,26 @@ async function loadModel() {
 
   const loadWith = async gpu => {
     wllama = make(); started = performance.now();
-    await wllama.loadModelFromHF(MODEL, gpu ? base : { ...base, n_gpu_layers: 0 });
+    const opts = gpu ? base : { ...base, n_gpu_layers: 0 };
+    // Ya guardado: se abre directamente del dispositivo, sin preguntar nada a internet.
+    if (saved) {
+      try {
+        const blob = await wllama.cacheManager.open(saved.name);
+        if (blob?.size) { await wllama.loadModel([blob], opts); return; }
+      } catch (e) { console.warn('No se pudo abrir el modelo guardado, uso la vía normal', e); try { await wllama.exit(); } catch {} wllama = make(); }
+    }
+    await wllama.loadModelFromHF(MODEL, opts);
   };
   let gpu = pref === 'gpu' || (pref === 'auto' && !gpuBroken);
   try {
     if (gpu && !(make().isSupportWebGPU?.() ?? false)) gpu = false;
     await loadWith(gpu);
-    if (gpu) {
-      showLoading('Comprobando el traductor…', 'Un segundo', 100);
-      if (!(await selfTest())) {
+    if (gpu && !store.get('gpuOk', false)) {
+      showLoading('Comprobando el traductor…', 'Solo la primera vez', 100);
+      if (await selfTest()) store.set('gpuOk', true);
+      else {
         console.warn('La GPU da resultados incorrectos, cambio a CPU');
-        store.set('gpuBroken', true);
+        store.set('gpuBroken', true); store.set('gpuOk', false);
         try { await wllama.exit(); } catch {}
         showLoading('Preparando el traductor…', 'Tu GPU no traduce bien, uso el procesador', 100);
         gpu = false;
@@ -436,7 +446,7 @@ document.getElementById('engineSeg').addEventListener('click', async e => {
   const v = b.dataset.engine;
   if (v === store.get('engine', 'auto')) return;
   store.set('engine', v);
-  if (v === 'gpu' || v === 'auto') store.set('gpuBroken', false);
+  if (v === 'gpu' || v === 'auto') { store.set('gpuBroken', false); store.set('gpuOk', false); }
   renderEngine();
   if (state.ready || store.get('ready', false)) {
     job?.ctrl.abort(); state.ready = false; closeSheets(); await loadModel();
@@ -534,7 +544,7 @@ async function translateNow() {
     if (degenerate) {
       renderOutput('');
       if (currentGpu) {
-        store.set('gpuBroken', true); toast('Tu GPU no traduce bien. Cambio al procesador…');
+        store.set('gpuBroken', true); store.set('gpuOk', false); toast('Tu GPU no traduce bien. Cambio al procesador…');
         resolve(); job = null; els.stop.hidden = true; state.ready = false;
         loadModel(); return;
       }
@@ -1389,7 +1399,7 @@ async function translateDoc() {
       } catch (e) {
         if (e instanceof Degenerate) {
           if (currentGpu) {
-            store.set('gpuBroken', true);
+            store.set('gpuBroken', true); store.set('gpuOk', false);
             toast('Tu GPU no traduce bien. Cambio al procesador, vuelve a pulsar Traducir.');
             state.ready = false; loadModel(); throw new DOMException('aborted', 'AbortError');
           }
@@ -1668,7 +1678,7 @@ async function camRun(ocr) {
         b.tr = await translatePlain(b.text, tgt, src, ctrl.signal, a => { b.el.textContent = a; });
       } catch (e) {
         if (e instanceof Degenerate) {
-          if (currentGpu) { store.set('gpuBroken', true); toast('Tu GPU no traduce bien. Cambio al procesador, vuelve a pulsar Repetir.'); state.ready = false; loadModel(); throw new DOMException('aborted', 'AbortError'); }
+          if (currentGpu) { store.set('gpuBroken', true); store.set('gpuOk', false); toast('Tu GPU no traduce bien. Cambio al procesador, vuelve a pulsar Repetir.'); state.ready = false; loadModel(); throw new DOMException('aborted', 'AbortError'); }
           b.tr = null;
         } else throw e;
       }
