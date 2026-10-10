@@ -9,7 +9,11 @@
 <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
 <link rel="manifest" href="manifest.webmanifest">
 <link rel="icon" href="icon.svg" type="image/svg+xml">
-<link rel="apple-touch-icon" href="icon.svg">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Traductor">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
 <link rel="stylesheet" href="style.css">
 <script>
   // Activa el aislamiento entre orígenes (necesario para usar varios hilos) mediante el service worker.
@@ -33,6 +37,7 @@
     <span class="name">Traductor</span>
   </div>
   <div class="top-actions">
+    <button class="install-btn" id="installBtn" hidden>Instalar app</button>
     <span class="chip" id="backendChip" hidden></span>
     <button class="icon-btn" id="historyBtn" title="Historial" aria-label="Historial">
       <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4M12 7v5l3 2"/></svg>
@@ -100,6 +105,10 @@
 
   <p class="foot-note">Funciona con <a href="https://github.com/Tencent-Hunyuan/Hy-MT2" target="_blank" rel="noopener">Hy-MT2 1.8B</a> de Tencent, dentro de tu navegador. Nada de lo que escribes sale de tu dispositivo.</p>
 </main>
+<div class="ios-hint" id="iosHint" hidden>
+  <p>Para instalarla en tu iPhone: toca <b>Compartir</b> y luego <b>Añadir a pantalla de inicio</b>.</p>
+  <button class="icon-btn" id="iosHintClose" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+</div>
 
 <!-- Selector de idioma -->
 <div class="sheet-backdrop" id="sheet" hidden>

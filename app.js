@@ -563,3 +563,34 @@ if (store.get('ready', false)) loadModel(); else showCard();
 const params = new URLSearchParams(location.search);
 if (params.get('to') && L[params.get('to')]) { state.tgt = params.get('to'); renderLangs(); }
 if (params.get('q')) { els.src.value = params.get('q'); onInput(); }
+
+// ---------- Instalar como app ----------
+(() => {
+  const btn = document.getElementById('installBtn');
+  const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+  let deferred = null;
+  addEventListener('beforeinstallprompt', e => { e.preventDefault(); deferred = e; if (!standalone) btn.hidden = false; });
+  btn.addEventListener('click', async () => {
+    if (!deferred) return;
+    deferred.prompt();
+    const { outcome } = await deferred.userChoice;
+    deferred = null; btn.hidden = true;
+    if (outcome === 'accepted') toast('Instalando el traductor…');
+  });
+  addEventListener('appinstalled', () => { btn.hidden = true; toast('App instalada'); });
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  const hint = document.getElementById('iosHint');
+  if (ios && !standalone && !localStorage.getItem('tr.iosHint')) {
+    setTimeout(() => { hint.hidden = false; }, 2500);
+  }
+  document.getElementById('iosHintClose').addEventListener('click', () => { hint.hidden = true; localStorage.setItem('tr.iosHint', '1'); });
+
+  // Texto compartido desde otra app o atajo "?to=xx"
+  const q = new URLSearchParams(location.search);
+  const shared = [q.get('title'), q.get('text'), q.get('url')].filter(Boolean).join('\n').trim();
+  const to = q.get('to');
+  if (to && typeof setTarget === 'function') { try { setTarget(to); } catch {} }
+  if (shared) { els.src.value = shared.slice(0, 5000); els.src.dispatchEvent(new Event('input')); }
+  // Solo limpia la URL cuando ya no habrá recarga por el service worker
+  if (q.toString() && (self.crossOriginIsolated || !('serviceWorker' in navigator))) history.replaceState(null, '', location.pathname);
+})();
