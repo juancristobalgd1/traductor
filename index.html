@@ -15,7 +15,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Traductor">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="style.css?v=11">
+<link rel="stylesheet" href="style.css?v=12">
 <script>
   // Activa el aislamiento entre orígenes (necesario para usar varios hilos) mediante el service worker.
   if ('serviceWorker' in navigator) {
@@ -83,7 +83,7 @@
       <div class="model-card" id="modelCard" hidden>
         <div class="mc-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg></div>
         <h2>Descarga el traductor una sola vez</h2>
-        <p>Son unos 1,1 GB. Después traduce dentro de tu dispositivo: sin internet y sin enviar tus textos a ningún servidor.</p>
+        <p>Son unos 1,1 GB y se descargan solo esta vez: queda guardado en tu dispositivo. Después traduce sin internet y sin enviar tus textos a ningún servidor.</p>
         <p class="hint" id="memHint" hidden>Tu dispositivo tiene poca memoria. Puede que vaya lento o que el navegador lo cierre.</p>
         <button class="primary" id="loadBtn">Descargar y empezar</button>
         <p class="tiny">Mejor con wifi. Funciona mejor en Chrome o Edge.</p>
@@ -205,6 +205,7 @@
     <div class="info-body">
       <dl>
         <div><dt>Modelo</dt><dd>Hy-MT2 1.8B (Q4_K_M, 1,1 GB)</dd></div>
+        <div><dt>Guardado</dt><dd id="infoStorage">Sin descargar</dd></div>
         <div><dt>Idiomas</dt><dd>33 idiomas y 5 variantes</dd></div>
         <div><dt>Motor</dt><dd id="infoBackend">Sin cargar</dd></div>
         <div class="engine"><dt>Usar</dt><dd><div class="seg" id="engineSeg"><button data-engine="auto">Auto</button><button data-engine="cpu">Procesador</button><button data-engine="gpu">GPU</button></div></dd></div>
@@ -217,6 +218,6 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<script type="module" src="app.js?v=11"></script>
+<script type="module" src="app.js?v=12"></script>
 </body>
 </html>

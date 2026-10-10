@@ -337,9 +337,33 @@ function isDegenerate(text) {
 }
 
 let currentGpu = false;
+// ---------- Modelo guardado en el dispositivo ----------
+// La librería guarda el archivo en el almacenamiento privado del navegador (OPFS).
+// Aquí comprobamos que sigue ahí y pedimos que el navegador no lo borre nunca.
+async function cachedModel() {
+  try {
+    const list = await new Wllama(WASM).cacheManager.list();
+    const f = list.find(x => x.name.includes(MODEL.file.replace('.gguf', '')) && x.name.endsWith('.gguf'));
+    if (!f) return null;
+    const full = !f.metadata?.originalSize || f.size >= f.metadata.originalSize;
+    return full ? f : null;
+  } catch { return null; }
+}
+async function protectStorage() {
+  if (!navigator.storage?.persist) return false;
+  try { return (await navigator.storage.persisted()) || (await navigator.storage.persist()); } catch { return false; }
+}
+async function renderStorage() {
+  const dd = document.getElementById('infoStorage'); if (!dd) return;
+  const f = await cachedModel();
+  if (!f) { dd.textContent = 'Sin descargar'; return; }
+  const kept = await navigator.storage?.persisted?.().catch(() => false);
+  dd.textContent = `${gb(f.size)} GB en este dispositivo${kept ? ' · protegido' : ''}`;
+  dd.title = kept ? 'El navegador no lo borrará aunque falte espacio' : 'Si el navegador se queda sin espacio podría borrarlo. Instalar la app ayuda a protegerlo.';
+}
 async function loadModel() {
-  const fromCache = store.get('ready', false);
-  showLoading(fromCache ? 'Preparando el traductor…' : 'Descargando modelo…', '', 0);
+  const fromCache = !!(await cachedModel());
+  showLoading(fromCache ? 'Abriendo el traductor…' : 'Descargando modelo…', fromCache ? 'Ya está guardado en tu dispositivo' : '', fromCache ? 100 : 0);
   const make = () => new Wllama(WASM, { parallelDownloads: 3, allowOffline: true, suppressNativeLog: true });
   let started = performance.now();
   const progressCallback = ({ loaded, total }) => {
@@ -348,7 +372,7 @@ async function loadModel() {
     const secs = (performance.now() - started) / 1000;
     const speed = loaded / Math.max(secs, 0.5);
     const eta = speed > 0 ? Math.round((total - loaded) / speed) : 0;
-    if (loaded >= total) showLoading('Preparando el traductor…', 'Cargándolo en memoria', 100);
+    if (fromCache || loaded >= total) showLoading(fromCache ? 'Abriendo el traductor…' : 'Preparando el traductor…', fromCache ? 'Ya está guardado en tu dispositivo' : 'Guardándolo y cargándolo en memoria', 100);
     else showLoading('Descargando modelo…', `${gb(loaded)} de ${gb(total)} GB${eta > 2 ? ` · faltan ~${eta > 90 ? Math.round(eta / 60) + ' min' : eta + ' s'}` : ''}`, pct);
   };
   const base = { n_ctx: 4096, n_batch: 512, progressCallback, useCache: true };
@@ -391,6 +415,7 @@ async function loadModel() {
   currentGpu = gpu;
   cache.clear();
   store.set('ready', true);
+  protectStorage().then(ok => { if (ok && !fromCache) toast('Modelo guardado en tu dispositivo. Ya no se volverá a descargar.'); renderStorage(); });
   state.ready = true;
   const threads = wllama.getNumThreads?.() ?? 1;
   els.chip.textContent = gpu ? 'GPU' : 'CPU'; els.chip.hidden = false;
@@ -429,7 +454,7 @@ els.deleteModel.addEventListener('click', async () => {
   } catch (e) { console.warn(e); }
   store.set('ready', false); state.ready = false; wllama = null;
   els.chip.hidden = true; els.infoBackend.textContent = 'Sin cargar';
-  closeSheets(); showCard(); toast('Modelo borrado');
+  closeSheets(); showCard(); toast('Modelo borrado'); renderStorage();
 });
 
 // ---------- Traducción ----------
@@ -653,14 +678,23 @@ els.clearHist.addEventListener('click', () => {
   }
   store.set('history', []); renderHistory(); resetClearHist(); toast('Historial borrado');
 });
-els.infoBtn.addEventListener('click', () => openSheet(els.infoSheet, els.infoBtn));
+els.infoBtn.addEventListener('click', () => { renderStorage(); openSheet(els.infoSheet, els.infoBtn); });
 
 
 // ---------- Arranque ----------
 renderLangs();
 onInput();
 if ((navigator.deviceMemory || 8) < 4) els.memHint.hidden = false;
-if (store.get('ready', false)) loadModel(); else showCard();
+// Al abrir: si el modelo sigue guardado se carga solo, sin descargar nada.
+(async () => {
+  const f = await cachedModel();
+  if (f) loadModel();
+  else {
+    if (store.get('ready', false)) { store.set('ready', false); toast('El navegador borró el modelo para liberar espacio. Toca descargar para recuperarlo.'); }
+    showCard();
+  }
+  renderStorage();
+})();
 // Permite compartir texto por URL: ?q=hola&to=en
 const params = new URLSearchParams(location.search);
 if (params.get('to') && L[params.get('to')]) { state.tgt = params.get('to'); renderLangs(); }
