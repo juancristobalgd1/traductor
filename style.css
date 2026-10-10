@@ -110,3 +110,10 @@ textarea::placeholder{color:var(--muted)}
 .lang-pill.auto svg{order:2}
 .pane.out{min-height:370px}
 @media (max-width:480px){.lang-pill{padding:0 10px;gap:4px}.lang-pill.auto svg{display:none}}
+.pane{min-width:0;overflow:hidden}
+.output{overflow-wrap:anywhere}
+html,body{overflow-x:hidden}
+.seg{display:inline-flex;background:var(--soft);border-radius:10px;padding:3px}
+.seg button{padding:6px 12px;border-radius:8px;font-size:14px;color:var(--muted)}
+.seg button.sel{background:var(--card);color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+.info-body dl div.engine{align-items:center}

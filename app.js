@@ -247,6 +247,23 @@ function showLoading(text, sub, pct) {
 function hideOverlays() { els.modelCard.hidden = true; els.loadingBox.hidden = true; }
 const gb = b => (b / 1e9).toLocaleString('es-ES', { maximumFractionDigits: 2 });
 
+// Comprueba que el motor traduce bien. Algunas GPU de móvil dan resultados corruptos con WebGPU.
+async function selfTest() {
+  try {
+    const r = await wllama.createChatCompletion({
+      messages: [{ role: 'user', content: buildPrompt('Buenos días', 'en', 'es') }],
+      max_tokens: 16, temp: 0, top_k: 1,
+    });
+    const out = (r?.choices?.[0]?.message?.content || '').trim();
+    console.log('Prueba del motor:', out);
+    return /good|morning/i.test(out) && !/[^\x00-\x7F’'"]/.test(out);
+  } catch (e) { console.warn('Prueba del motor falló', e); return false; }
+}
+function isDegenerate(text) {
+  return text.length > 24 && /(.{1,12}?)\1{5,}$/su.test(text);
+}
+
+let currentGpu = false;
 async function loadModel() {
   const fromCache = store.get('ready', false);
   showLoading(fromCache ? 'Preparando el traductor…' : 'Descargando modelo…', '', 0);
@@ -262,18 +279,34 @@ async function loadModel() {
     else showLoading('Descargando modelo…', `${gb(loaded)} de ${gb(total)} GB${eta > 2 ? ` · faltan ~${eta > 90 ? Math.round(eta / 60) + ' min' : eta + ' s'}` : ''}`, pct);
   };
   const base = { n_ctx: 4096, n_batch: 512, progressCallback, useCache: true };
-  let gpu = false;
+  const pref = store.get('engine', 'auto');          // auto | cpu | gpu
+  const gpuBroken = store.get('gpuBroken', false);   // en este dispositivo la GPU traduce mal
+  if (wllama) { try { await wllama.exit(); } catch {} wllama = null; }
+
+  const loadWith = async gpu => {
+    wllama = make(); started = performance.now();
+    await wllama.loadModelFromHF(MODEL, gpu ? base : { ...base, n_gpu_layers: 0 });
+  };
+  let gpu = pref === 'gpu' || (pref === 'auto' && !gpuBroken);
   try {
-    wllama = make();
-    gpu = wllama.isSupportWebGPU?.() ?? false;
-    await wllama.loadModelFromHF(MODEL, base);
+    if (gpu && !(make().isSupportWebGPU?.() ?? false)) gpu = false;
+    await loadWith(gpu);
+    if (gpu) {
+      showLoading('Comprobando el traductor…', 'Un segundo', 100);
+      if (!(await selfTest())) {
+        console.warn('La GPU da resultados incorrectos, cambio a CPU');
+        store.set('gpuBroken', true);
+        try { await wllama.exit(); } catch {}
+        showLoading('Preparando el traductor…', 'Tu GPU no traduce bien, uso el procesador', 100);
+        gpu = false;
+        await loadWith(false);
+      }
+    }
   } catch (err) {
-    console.warn('Fallo al cargar con GPU, reintentando en CPU', err);
+    console.warn('Fallo al cargar, reintento en CPU', err);
     try { await wllama?.exit(); } catch {}
-    try {
-      wllama = make(); gpu = false; started = performance.now();
-      await wllama.loadModelFromHF(MODEL, { ...base, n_gpu_layers: 0 });
-    } catch (err2) {
+    try { gpu = false; await loadWith(false); }
+    catch (err2) {
       console.error(err2);
       wllama = null;
       showCard();
@@ -282,16 +315,36 @@ async function loadModel() {
       return;
     }
   }
+  currentGpu = gpu;
+  cache.clear();
   store.set('ready', true);
   state.ready = true;
   const threads = wllama.getNumThreads?.() ?? 1;
-  const backend = gpu ? 'GPU (WebGPU)' : `CPU · ${threads} ${threads === 1 ? 'hilo' : 'hilos'}`;
   els.chip.textContent = gpu ? 'GPU' : 'CPU'; els.chip.hidden = false;
-  els.infoBackend.textContent = backend;
+  els.infoBackend.textContent = gpu ? 'GPU (WebGPU)' : `Procesador · ${threads} ${threads === 1 ? 'hilo' : 'hilos'}`;
+  renderEngine();
   hideOverlays();
   setStatus('Listo');
   if (els.src.value.trim()) scheduleTranslate(0);
 }
+
+// Selector de motor en "Sobre el traductor"
+function renderEngine() {
+  const pref = store.get('engine', 'auto');
+  document.querySelectorAll('#engineSeg button').forEach(b => b.classList.toggle('sel', b.dataset.engine === pref));
+}
+document.getElementById('engineSeg').addEventListener('click', async e => {
+  const b = e.target.closest('[data-engine]'); if (!b) return;
+  const v = b.dataset.engine;
+  if (v === store.get('engine', 'auto')) return;
+  store.set('engine', v);
+  if (v === 'gpu' || v === 'auto') store.set('gpuBroken', false);
+  renderEngine();
+  if (state.ready || store.get('ready', false)) {
+    job?.ctrl.abort(); state.ready = false; closeSheets(); await loadModel();
+  }
+});
+renderEngine();
 els.loadBtn.addEventListener('click', loadModel);
 
 els.deleteModel.addEventListener('click', async () => {
@@ -352,7 +405,7 @@ async function translateNow() {
   job = { ctrl, done };
   els.stop.hidden = false;
   setStatus('Traduciendo…');
-  const t0 = performance.now(); let tokens = 0;
+  const t0 = performance.now(); let tokens = 0; let degenerate = false;
   try {
     for (let i = 0; i < segs.length; i++) {
       const s = segs[i];
@@ -371,11 +424,22 @@ async function translateNow() {
         if (ctrl.signal.aborted) break;
         const d = chunk?.choices?.[0]?.delta?.content;
         if (d) { acc += d; tokens++; results[i] = lead + acc; renderOutput(compose(), true); }
+        if (isDegenerate(acc)) { degenerate = true; ctrl.abort(); break; }
       }
-      if (ctrl.signal.aborted) throw new DOMException('aborted', 'AbortError');
+      if (degenerate) break;
+      if (ctrl.signal.aborted && !degenerate) throw new DOMException('aborted', 'AbortError');
       results[i] = lead + acc.trim() + trail;
       cache.set(`${tgt}\u0000${s.text}`, results[i]);
       renderOutput(compose(), true);
+    }
+    if (degenerate) {
+      renderOutput('');
+      if (currentGpu) {
+        store.set('gpuBroken', true); toast('Tu GPU no traduce bien. Cambio al procesador…');
+        resolve(); job = null; els.stop.hidden = true; state.ready = false;
+        loadModel(); return;
+      }
+      setStatus('No salió bien, prueba a reformular'); resolve(); return;
     }
     const final = compose();
     renderOutput(final);

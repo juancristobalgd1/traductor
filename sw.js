@@ -1,6 +1,6 @@
 // Service worker: guarda la app para usarla sin conexión y añade las cabeceras
 // COOP/COEP para que el navegador permita usar varios hilos (más velocidad).
-const VERSION = 'traductor-v2';
+const VERSION = 'traductor-v3';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon.svg',
   './vendor/wllama/index.js', './vendor/wllama/wllama.wasm'];
 
