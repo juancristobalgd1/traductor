@@ -827,6 +827,217 @@ function mdPrompt(data, tgt) {
 }
 const stripFence = s => s.replace(/^```[a-z]*\n([\s\S]*?)\n```$/i, '$1').trim();
 
+
+// ---------- PDF ----------
+// Lee el texto con pdf.js, lo agrupa en bloques (párrafos, títulos, celdas) y
+// al final tapa cada bloque con el color de fondo de la página y escribe la
+// traducción encima con pdf-lib, ajustando el tamaño para que quepa.
+FORMATS.pdf = { name: 'PDF', color: '#d93025', mime: 'application/pdf', kind: 'pdf', unit: 'bloques' };
+const PDF_CJK = { zh: 'SC', yue: 'SC', 'zh-Hant': 'TC', ja: 'JP', ko: 'KR' };
+const PDF_COMPLEX = new Set(['ar', 'he', 'fa', 'ur', 'hi', 'mr', 'gu', 'bn', 'ta', 'te', 'th', 'km', 'my', 'bo', 'ug']);
+const loadScript = src => new Promise((ok, ko) => { const sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = ko; document.head.appendChild(sc); });
+let pdfjsP, pdflibP;
+const loadPdfjs = () => pdfjsP ||= import('./vendor/pdfjs/pdf.min.mjs').then(m => {
+  m.GlobalWorkerOptions.workerSrc = new URL('vendor/pdfjs/pdf.worker.min.mjs', location.href).href; return m;
+});
+const loadPdfLib = () => pdflibP ||= loadScript('vendor/pdflib/pdf-lib.min.js').then(() => loadScript('vendor/pdflib/fontkit.umd.min.js'))
+  .then(() => ({ PDFLib: window.PDFLib, fontkit: window.fontkit }));
+const pdfAnalysis = new WeakMap();
+
+async function analyzePdf(file, onProgress) {
+  const pdfjs = await loadPdfjs();
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let pdf;
+  try { pdf = await pdfjs.getDocument({ data: bytes.slice(), isEvalSupported: false }).promise; }
+  catch (e) { if (e?.name === 'PasswordException') throw new Error('pdf-locked'); throw e; }
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const blocks = [];
+  for (let n = 1; n <= pdf.numPages; n++) {
+    onProgress?.(n, pdf.numPages);
+    const page = await pdf.getPage(n);
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(2, 1600 / Math.max(base.width, base.height));
+    const vp = page.getViewport({ scale });
+    canvas.width = Math.ceil(vp.width); canvas.height = Math.ceil(vp.height);
+    ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    const img = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const tc = await page.getTextContent();
+    const items = [];
+    for (const it of tc.items) {
+      if (!it.str || !it.str.trim() && !it.str.length) continue;
+      const [a, b, c, d, e, f] = it.transform;
+      if (Math.abs(b) > 0.01 || Math.abs(c) > 0.01 || a <= 0 || d <= 0) continue; // texto girado: lo dejo como está
+      const size = d;
+      if (size < 3) continue;
+      let font = null; try { if (page.commonObjs.has(it.fontName)) font = page.commonObjs.get(it.fontName); } catch {}
+      const fname = `${font?.name || ''} ${tc.styles[it.fontName]?.fontFamily || ''}`;
+      items.push({ str: it.str, x: e, y: f, w: it.width, size,
+        bold: !!font?.bold || /bold|black|heavy|semibold|demi/i.test(fname),
+        italic: !!font?.italic || /italic|oblique/i.test(fname) });
+    }
+    // Líneas
+    items.sort((p, q) => (q.y - p.y) || (p.x - q.x));
+    const lines = [];
+    for (const it of items) {
+      const ln = lines.find(l => Math.abs(l.y - it.y) < Math.min(l.size, it.size) * 0.35 && it.x >= l.x0 - l.size * 0.5
+        && it.x - l.x1 < l.size * 1.6 && Math.abs(l.size - it.size) < l.size * 0.3);
+      if (ln) {
+        const gap = it.x - ln.x1;
+        if (gap > ln.size * 0.12 && !/\s$/.test(ln.text) && !/^\s/.test(it.str)) ln.text += ' ';
+        ln.text += it.str; ln.x1 = Math.max(ln.x1, it.x + it.w); ln.chars += it.str.length;
+        if (it.bold) ln.boldChars += it.str.length; if (it.italic) ln.italicChars += it.str.length;
+      } else if (it.str.trim()) {
+        lines.push({ text: it.str, x0: it.x, x1: it.x + it.w, y: it.y, size: it.size, chars: it.str.length,
+          boldChars: it.bold ? it.str.length : 0, italicChars: it.italic ? it.str.length : 0 });
+      }
+    }
+    lines.forEach(l => { l.text = l.text.replace(/\s+/g, ' ').trim(); l.bold = l.boldChars > l.chars / 2; l.italic = l.italicChars > l.chars / 2; });
+    // Bloques
+    lines.sort((p, q) => (q.y - p.y) || (p.x0 - q.x0));
+    const pblocks = [];
+    for (const ln of lines) {
+      if (!ln.text) continue;
+      const bullet = /^([•▪◦·●○■\-–—*]|\d{1,3}[.)]|[a-z][.)])\s/i.test(ln.text);
+      const blk = !bullet && pblocks.find(bk => {
+        const last = bk.lines[bk.lines.length - 1];
+        const dy = last.y - ln.y;
+        return dy > ln.size * 0.6 && dy < Math.max(last.size, ln.size) * 1.9 && Math.abs(last.size - ln.size) < last.size * 0.15
+          && ln.x0 < bk.x1 && ln.x1 > bk.x0 && last.bold === ln.bold && (bk.lines.length < 2 || Math.abs(dy - bk.lineH) < ln.size * 0.35);
+      });
+      if (blk) {
+        const last = blk.lines[blk.lines.length - 1];
+        if (blk.lines.length === 1) blk.lineH = last.y - ln.y;
+        blk.lines.push(ln); blk.x0 = Math.min(blk.x0, ln.x0); blk.x1 = Math.max(blk.x1, ln.x1);
+      } else pblocks.push({ page: n, lines: [ln], x0: ln.x0, x1: ln.x1, size: ln.size, lineH: ln.size * 1.2, bold: ln.bold, italic: ln.italic });
+    }
+    const toPx = (x, y) => vp.convertToViewportPoint(x, y).map(Math.round);
+    for (const bk of pblocks) {
+      const ls = bk.lines;
+      bk.text = ls.reduce((acc, l) => !acc ? l.text : /[A-Za-zÀ-ÿ]-$/.test(acc) && /^\p{Ll}/u.test(l.text) ? acc.slice(0, -1) + l.text : acc + ' ' + l.text, '');
+      bk.top = ls[0].y + bk.size * 0.86; bk.bottom = ls[ls.length - 1].y - bk.size * 0.24;
+      bk.baseline = ls[0].y;
+      const w = bk.x1 - bk.x0, mid = (bk.x0 + bk.x1) / 2;
+      const centered = ls.length > 1
+        ? ls.every(l => Math.abs((l.x0 + l.x1) / 2 - mid) < Math.max(2, w * 0.04)) && ls.some(l => Math.abs(l.x0 - bk.x0) > bk.size * 0.5)
+        : Math.abs(mid - (base.viewBox[0] + base.viewBox[2]) / 2) < base.width * 0.03 && w < base.width * 0.8;
+      bk.align = centered ? 'center' : 'left';
+      bk.pageR = base.viewBox[2]; bk.single = ls.length === 1;
+      // Colores leídos de la página dibujada: fondo alrededor del bloque y tinta dentro.
+      const [ax, ay] = toPx(bk.x0, bk.top), [bx, by] = toPx(bk.x1, bk.bottom);
+      const X0 = Math.max(0, Math.min(ax, bx)), X1 = Math.min(img.width - 1, Math.max(ax, bx));
+      const Y0 = Math.max(0, Math.min(ay, by)), Y1 = Math.min(img.height - 1, Math.max(ay, by));
+      const px = (x, y) => { const i = (y * img.width + x) * 4; return [img.data[i], img.data[i + 1], img.data[i + 2]]; };
+      const ring = [];
+      for (let x = X0; x <= X1; x += 2) for (const y of [Y0 - 3, Y1 + 3]) if (y >= 0 && y < img.height) ring.push(px(x, y));
+      for (let y = Y0; y <= Y1; y += 2) for (const x of [X0 - 3, X1 + 3]) if (x >= 0 && x < img.width) ring.push(px(x, y));
+      const med = k => { const v = ring.map(p => p[k]).sort((p, q) => p - q); return v.length ? v[v.length >> 1] : 255; };
+      bk.bg = [med(0), med(1), med(2)];
+      const ink = []; let maxD = 0;
+      for (let y = Y0; y <= Y1; y += 1) for (let x = X0; x <= X1; x += 1) {
+        const p = px(x, y), dd = Math.abs(p[0] - bk.bg[0]) + Math.abs(p[1] - bk.bg[1]) + Math.abs(p[2] - bk.bg[2]);
+        if (dd > maxD) maxD = dd; if (dd > 90) ink.push([p, dd]);
+      }
+      const strong = ink.filter(([, dd]) => dd > maxD * 0.7);
+      bk.color = strong.length ? [0, 1, 2].map(k => Math.round(strong.reduce((a, [p]) => a + p[k], 0) / strong.length)) : [20, 20, 20];
+      delete bk.lines;
+      blocks.push(bk);
+    }
+    page.cleanup();
+  }
+  return { bytes, blocks, pages: pdf.numPages };
+}
+
+async function parsePdf(file) {
+  if (!pdfAnalysis.has(file)) pdfAnalysis.set(file, analyzePdf(file, (n, t) => { del.meta.textContent = `Leyendo página ${n} de ${t}…`; }));
+  let an;
+  try { an = await pdfAnalysis.get(file); } catch (e) { pdfAnalysis.delete(file); throw e; }
+  const units = an.blocks.filter(bk => /\p{L}{2}/u.test(bk.text)).map(bk => {
+    const obj = { textContent: bk.text };
+    return { text: bk.text, segs: [{ ts: [obj], text: bk.text }], pdf: bk, obj };
+  });
+  return {
+    units, extraMeta: `${an.pages} página${an.pages > 1 ? 's' : ''}`,
+    emptyHint: 'Este PDF no tiene texto seleccionable (parece escaneado)',
+    build: tgt => buildPdf(an, units, tgt),
+  };
+}
+
+const fontBytes = new Map();
+async function getFont(url) {
+  if (!fontBytes.has(url)) fontBytes.set(url, fetch(url).then(r => { if (!r.ok) throw new Error('font'); return r.arrayBuffer(); }));
+  return fontBytes.get(url);
+}
+async function pdfFonts(doc, tgt) {
+  const cjk = PDF_CJK[tgt];
+  if (cjk) {
+    const f = await doc.embedFont(await getFont(`https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/SubsetOTF/${cjk}/NotoSans${cjk}-Regular.otf`), { subset: true });
+    return { r: f, cjk: true };
+  }
+  const out = {};
+  for (const [k, n] of [['r', 'Regular'], ['b', 'Bold'], ['i', 'Italic'], ['bi', 'BoldItalic']])
+    out[k] = await doc.embedFont(await getFont(`fonts/NotoSans-${n}.ttf`), { subset: true });
+  return out;
+}
+
+function wrapText(text, font, size, maxW, cjk) {
+  const tokens = cjk ? text.match(/[\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]|[^\s\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]+|\s+/g) || [] : text.split(/(\s+)/);
+  const lines = []; let cur = '';
+  const W = t => font.widthOfTextAtSize(t, size);
+  for (const tok of tokens) {
+    if (!tok) continue;
+    if (/^\s+$/.test(tok)) { if (cur) cur += ' '; continue; }
+    if (W(cur + tok) <= maxW || !cur.trim()) {
+      if (!cur.trim() && W(tok) > maxW) { // palabra más larga que la línea: la parto
+        let part = '';
+        for (const ch of tok) { if (W(part + ch) > maxW && part) { lines.push(part); part = ''; } part += ch; }
+        cur = part;
+      } else cur += tok;
+    } else { lines.push(cur.trimEnd()); cur = tok; }
+  }
+  if (cur.trim()) lines.push(cur.trimEnd());
+  return lines;
+}
+
+async function buildPdf(an, units, tgt) {
+  const { PDFLib, fontkit } = await loadPdfLib();
+  const doc = await PDFLib.PDFDocument.load(an.bytes, { ignoreEncryption: true, updateMetadata: false });
+  doc.registerFontkit(fontkit);
+  const fonts = await pdfFonts(doc, tgt);
+  const pages = doc.getPages();
+  const rgb = c => PDFLib.rgb(c[0] / 255, c[1] / 255, c[2] / 255);
+  const jobs = [];
+  for (const u of units) {
+    const bk = u.pdf;
+    const text = u.obj.textContent.replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
+    if (!text || text === u.text) continue;
+    const font = fonts.cjk ? fonts.r : fonts[(bk.bold ? 'b' : '') + (bk.italic ? 'i' : '')] || fonts.r;
+    let w = Math.max(bk.x1 - bk.x0, bk.size * 2); const h = bk.top - bk.bottom;
+    if (bk.single && bk.align === 'left') w = Math.min(w * 1.25, bk.pageR - bk.x0 - 24); // una línea suelta puede crecer un poco
+    w = Math.max(w, bk.x1 - bk.x0);
+    let size = bk.size, lines, lineH;
+    for (;;) {
+      lineH = bk.lineH * size / bk.size;
+      lines = wrapText(text, font, size, w + 0.5, fonts.cjk);
+      const need = (lines.length - 1) * lineH + size * 1.1;
+      if (need <= h * 1.08 + 1 || size <= bk.size * 0.55) break;
+      size *= 0.94;
+    }
+    jobs.push({ page: pages[bk.page - 1], bk, font, size, lines, lineH, w });
+  }
+  for (const j of jobs) j.page.drawRectangle({ x: j.bk.x0 - 1.5, y: j.bk.bottom - 1, width: Math.max(j.bk.x1 - j.bk.x0, j.bk.align === 'left' ? Math.max(...j.lines.map(l => j.font.widthOfTextAtSize(l, j.size))) : 0) + 3, height: j.bk.top - j.bk.bottom + 2, color: rgb(j.bk.bg) });
+  for (const j of jobs) {
+    const y0 = j.bk.top - j.size * 0.86;
+    j.lines.forEach((ln, i) => {
+      const lw = j.font.widthOfTextAtSize(ln, j.size);
+      const x = j.bk.align === 'center' ? (j.bk.x0 + j.bk.x1 - lw) / 2 : j.bk.x0;
+      j.page.drawText(ln, { x, y: y0 - i * j.lineH, size: j.size, font: j.font, color: rgb(j.bk.color) });
+    });
+  }
+  return new Blob([await doc.save()], { type: 'application/pdf' });
+}
+
 // ---------- Motor de traducción común ----------
 function setSegText(seg, text) {
   seg.ts.forEach((t, i) => { t.textContent = i === 0 ? text : ''; });
@@ -964,7 +1175,7 @@ async function openDoc(file) {
   if (!file) return;
   const ext = extOf(file.name);
   if (OLD_FORMATS[ext]) { toast(`Guárdalo como ${OLD_FORMATS[ext]} y vuelve a probar`); return; }
-  if (!FORMATS[ext]) { toast('Formatos: Word, PowerPoint, Excel, PDF, Markdown y texto'); return; }
+  if (!FORMATS[ext]) { toast('Formatos: PDF, Word, PowerPoint, Excel, Markdown y texto'); return; }
   if (docBusy) { toast('Espera a que termine el documento actual'); return; }
   setMode('doc');
   const fmt = FORMATS[ext];
@@ -994,6 +1205,9 @@ async function translateDoc() {
   if (!state.ready) {
     setMode('text'); if (els.loadingBox.hidden) showCard();
     toast('Primero descarga el traductor'); return;
+  }
+  if (extOf(docState.file.name) === 'pdf' && PDF_COMPLEX.has(state.tgt)) {
+    toast(`En PDF aún no puedo escribir en ${L[state.tgt].name.toLowerCase()}. Prueba con Word o con otro idioma.`); return;
   }
   job?.ctrl.abort();
   const parsed = await parseFile(docState.file);   // copia limpia cada vez

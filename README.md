@@ -12,6 +12,7 @@ Atajo: Ctrl + Enter para traducir al momento. También acepta `?q=texto&to=en` e
 
 En la pestaña **Documentos** traduces un archivo entero sin que salga de tu dispositivo:
 
+- **PDF**: se mantiene el diseño de cada página (columnas, colores, imágenes); el texto traducido se ajusta al hueco del original. Los PDF escaneados sin texto no se pueden traducir, y de momento no escribe árabe, hebreo, persa, urdu, idiomas de la India, tailandés, jemer, birmano, tibetano ni uigur.
 - **Word (.docx)**: formato, estilos, listas, tablas, encabezados, pies de página e imágenes.
 - **PowerPoint (.pptx)**: diapositivas, notas del orador, SmartArt y gráficos, con su formato.
 - **Excel (.xlsx)**: textos de las celdas (incluido texto enriquecido); números, fórmulas, correos y enlaces no se tocan.
