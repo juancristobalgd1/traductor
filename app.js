@@ -149,9 +149,61 @@ let docBusy = false;     // hay un documento traduciéndose
 const cache = new Map(); // `${tgt}\u0000${segmento}` -> traducción
 
 // ---------- Utilidades UI ----------
+const haptic = (ms = 8) => { if (matchMedia('(pointer:coarse)').matches) navigator.vibrate?.(ms); };
 function toast(msg) {
-  els.toast.textContent = msg; els.toast.hidden = false;
-  clearTimeout(toast.t); toast.t = setTimeout(() => (els.toast.hidden = true), 2200);
+  const t = els.toast;
+  t.textContent = msg; t.hidden = false;
+  requestAnimationFrame(() => requestAnimationFrame(() => t.classList.add('show')));
+  clearTimeout(toast.t); clearTimeout(toast.h);
+  toast.t = setTimeout(() => { t.classList.remove('show'); toast.h = setTimeout(() => (t.hidden = true), 260); }, Math.min(4200, 1600 + msg.length * 40));
+}
+function flashDone(btn) {
+  btn.classList.add('done'); haptic(10);
+  clearTimeout(btn._d); btn._d = setTimeout(() => btn.classList.remove('done'), 1400);
+}
+function flashLabel(btn, text) {
+  if (!btn._label) btn._label = btn.textContent;
+  btn.textContent = text; haptic(10);
+  clearTimeout(btn._d); btn._d = setTimeout(() => { btn.textContent = btn._label; btn._label = null; }, 1400);
+}
+// ---------- Hojas con animación, arrastre para cerrar y foco ----------
+let sheetOpener = null;
+function openSheet(bd, opener) {
+  sheetOpener = opener || document.activeElement;
+  bd.hidden = false; document.body.classList.add('lock');
+  opener?.setAttribute?.('aria-expanded', 'true');
+  requestAnimationFrame(() => requestAnimationFrame(() => bd.classList.add('open')));
+}
+function closeSheets() {
+  for (const bd of [els.sheet, els.histSheet, els.infoSheet]) {
+    if (bd.hidden) continue;
+    bd.classList.remove('open');
+    const sh = bd.querySelector('.sheet'); sh.style.transform = '';
+    setTimeout(() => { if (!bd.classList.contains('open')) bd.hidden = true; }, 300);
+  }
+  document.body.classList.remove('lock');
+  els.srcBtn.setAttribute('aria-expanded', 'false'); els.tgtBtn.setAttribute('aria-expanded', 'false');
+  if (sheetOpener && document.contains(sheetOpener) && matchMedia('(pointer:fine)').matches) sheetOpener.focus({ preventScroll: true });
+  sheetOpener = null;
+}
+for (const bd of [document.getElementById('sheet'), document.getElementById('historySheet'), document.getElementById('infoSheet')]) {
+  const sh = bd.querySelector('.sheet'), head = bd.querySelector('.sheet-head');
+  let y0 = null, dy = 0, t0 = 0;
+  head.addEventListener('pointerdown', e => {
+    if (e.target.closest('input,button') || matchMedia('(min-width:700px)').matches) return;
+    y0 = e.clientY; dy = 0; t0 = performance.now(); sh.classList.add('dragging'); head.setPointerCapture(e.pointerId);
+  });
+  head.addEventListener('pointermove', e => {
+    if (y0 == null) return;
+    dy = Math.max(0, e.clientY - y0); sh.style.transform = `translateY(${dy}px)`;
+  });
+  const end = () => {
+    if (y0 == null) return;
+    y0 = null; sh.classList.remove('dragging');
+    const fast = dy / (performance.now() - t0) > .6;
+    if (dy > 110 || (fast && dy > 30)) closeSheets(); else sh.style.transform = '';
+  };
+  head.addEventListener('pointerup', end); head.addEventListener('pointercancel', end);
 }
 function setStatus(msg) { els.status.textContent = msg || ''; }
 function renderLangs() {
@@ -183,8 +235,10 @@ function openPicker(which) {
   els.sheetTitle.textContent = which === 'src' ? 'Traducir del' : 'Traducir a';
   els.sheetSearch.value = '';
   fillPicker('');
-  els.sheet.hidden = false;
-  setTimeout(() => els.sheetSearch.focus(), 50);
+  openSheet(els.sheet, which === 'src' ? els.srcBtn : els.tgtBtn);
+  els.sheetList.scrollTop = 0;
+  // En móvil no abrimos el teclado de golpe: tapa media lista.
+  if (matchMedia('(pointer:fine)').matches) setTimeout(() => els.sheetSearch.focus({ preventScroll: true }), 60);
 }
 function fillPicker(q) {
   const norm = s => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
@@ -205,7 +259,14 @@ function fillPicker(q) {
 }
 els.sheetSearch.addEventListener('input', e => fillPicker(e.target.value));
 els.sheetSearch.addEventListener('keydown', e => {
-  if (e.key === 'Enter') { const first = els.sheetList.querySelector('[data-code]'); first && first.click(); }
+  const opts = [...els.sheetList.querySelectorAll('[data-code]')];
+  let i = opts.findIndex(o => o.classList.contains('kb'));
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    i = e.key === 'ArrowDown' ? Math.min(opts.length - 1, i + 1) : Math.max(0, i - 1);
+    opts.forEach((o, j) => o.classList.toggle('kb', j === i));
+    opts[i]?.scrollIntoView({ block: 'nearest' });
+  } else if (e.key === 'Enter') { (opts[i] || opts[0])?.click(); }
 });
 els.sheetList.addEventListener('click', e => {
   const b = e.target.closest('[data-code]'); if (!b) return;
@@ -218,11 +279,10 @@ els.sheetList.addEventListener('click', e => {
     state.tgt = code; store.set('tgt', code);
   }
   if (code !== 'auto') pushRecent(code);
-  closeSheets();
+  haptic(); closeSheets();
   renderLangs();
   scheduleTranslate(0);
 });
-function closeSheets() { for (const s of [els.sheet, els.histSheet, els.infoSheet]) s.hidden = true; }
 for (const s of [els.sheet, els.histSheet, els.infoSheet]) s.addEventListener('click', e => { if (e.target === s) closeSheets(); });
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheets(); });
 els.srcBtn.addEventListener('click', () => openPicker('src'));
@@ -231,7 +291,7 @@ els.tgtBtn.addEventListener('click', () => openPicker('tgt'));
 els.swap.addEventListener('click', () => {
   const from = state.src === 'auto' ? (state.detected || null) : state.src;
   if (!from) { toast('Escribe algo primero para saber el idioma de origen'); return; }
-  els.swap.classList.toggle('spin');
+  els.swap._r = (els.swap._r || 0) + 180; els.swap.style.setProperty('--r', els.swap._r + 'deg'); haptic();
   const newSrc = state.tgt, newTgt = from;
   state.src = newSrc; state.tgt = newTgt; store.set('src', newSrc); store.set('tgt', newTgt);
   if (state.output) els.src.value = state.output;
@@ -446,7 +506,7 @@ async function translateNow() {
     const final = compose();
     renderOutput(final);
     const secs = (performance.now() - t0) / 1000;
-    setStatus(tokens > 4 ? `${(tokens / secs).toFixed(1)} tokens/s` : '');
+    setStatus('Listo'); els.status.title = tokens > 4 ? `${(tokens / secs).toFixed(1)} tokens/s` : '';
     saveHistory(text, final);
     resolve();
   } catch (e) {
@@ -470,6 +530,7 @@ els.stop.addEventListener('click', () => { job?.ctrl.abort(); setStatus('Detenid
 function onInput(immediate) {
   const v = els.src.value;
   els.count.textContent = `${v.length.toLocaleString('es-ES')} / 5000`;
+  els.count.classList.toggle('near', v.length >= 4800);
   els.clear.hidden = !v;
   state.detected = detect(v);
   // Como Google: si el idioma detectado coincide con el de destino, cambia el destino.
@@ -488,7 +549,7 @@ els.clear.addEventListener('click', () => { els.src.value = ''; onInput(); els.s
 // ---------- Copiar, compartir, voz ----------
 els.copy.addEventListener('click', async () => {
   if (!state.output) return;
-  try { await navigator.clipboard.writeText(state.output); toast('Traducción copiada'); } catch { toast('No se pudo copiar'); }
+  try { await navigator.clipboard.writeText(state.output); flashDone(els.copy); } catch { toast('No se pudo copiar'); }
 });
 if (navigator.share) {
   els.share.hidden = false;
@@ -545,7 +606,7 @@ function renderHistory() {
     <div class="meta">${x.sl && L[x.sl] ? L[x.sl].name : 'Detectado'} → ${L[x.tg]?.name || ''} · ${new Date(x.at).toLocaleDateString('es-ES', { day: 'numeric', month: 'short' })}</div>
     <div class="s">${esc(x.s)}</div><div class="t">${esc(x.t)}</div></button>`).join('');
 }
-els.histBtn.addEventListener('click', () => { renderHistory(); els.histSheet.hidden = false; });
+els.histBtn.addEventListener('click', () => { renderHistory(); resetClearHist(); openSheet(els.histSheet, els.histBtn); });
 els.histList.addEventListener('click', e => {
   const b = e.target.closest('[data-i]'); if (!b) return;
   const x = store.get('history', [])[+b.dataset.i]; if (!x) return;
@@ -553,8 +614,24 @@ els.histList.addEventListener('click', e => {
   cache.set(`${x.tg}\u0000${x.s}`, x.t);
   els.src.value = x.s; closeSheets(); onInput(true);
 });
-els.clearHist.addEventListener('click', () => { store.set('history', []); renderHistory(); });
-els.infoBtn.addEventListener('click', () => (els.infoSheet.hidden = false));
+function resetClearHist() {
+  els.clearHist.classList.remove('confirm'); els.clearHist.textContent = 'Borrar todo';
+  els.clearHist.hidden = !store.get('history', []).length;
+}
+els.clearHist.addEventListener('click', () => {
+  // Dos toques: el primero pide confirmación, el segundo borra.
+  if (!els.clearHist.classList.contains('confirm')) {
+    els.clearHist.classList.add('confirm'); els.clearHist.textContent = '¿Seguro? Toca otra vez'; haptic();
+    clearTimeout(els.clearHist._t); els.clearHist._t = setTimeout(resetClearHist, 3000);
+    return;
+  }
+  store.set('history', []); renderHistory(); resetClearHist(); toast('Historial borrado');
+});
+els.infoBtn.addEventListener('click', () => openSheet(els.infoSheet, els.infoBtn));
+// La cabecera solo muestra su línea inferior cuando hay contenido debajo.
+const topBar = document.querySelector('.top');
+const onScroll = () => topBar.classList.toggle('scrolled', scrollY > 4);
+addEventListener('scroll', onScroll, { passive: true }); onScroll();
 
 // ---------- Arranque ----------
 renderLangs();
@@ -640,7 +717,15 @@ const docState = { file: null, parsed: null, result: null, ctrl: null };
 const docCache = new Map();
 
 function setMode(mode) {
+  const prev = store.get('mode', 'text');
   store.set('mode', mode);
+  const idx = ['text', 'doc', 'cam'].indexOf(mode);
+  del.modes.style.setProperty('--i', Math.max(0, idx));
+  if (prev !== mode) {
+    haptic(6);
+    const pane = mode === 'text' ? del.panes : mode === 'doc' ? del.pane : document.getElementById('camPane');
+    pane.classList.remove('enter'); void pane.offsetWidth; pane.classList.add('enter');
+  }
   del.modes.querySelectorAll('[data-mode]').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('sel', on); b.setAttribute('aria-selected', on); });
   del.panes.hidden = mode !== 'text';
   document.getElementById('camPane').hidden = mode !== 'cam';
@@ -1573,7 +1658,7 @@ cel.share.addEventListener('click', async () => {
 });
 cel.copy.addEventListener('click', async () => {
   const t = camState.blocks.map(b => b.tr || b.text).join('\n\n');
-  try { await navigator.clipboard.writeText(t); toast('Texto copiado'); } catch { toast('No pude copiar'); }
+  try { await navigator.clipboard.writeText(t); flashLabel(cel.copy, 'Copiado'); } catch { toast('No pude copiar'); }
 });
 cel.start.addEventListener('dragover', e => { e.preventDefault(); cel.start.classList.add('over'); });
 cel.start.addEventListener('dragleave', () => cel.start.classList.remove('over'));
