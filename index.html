@@ -15,7 +15,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Traductor">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="style.css">
+<link rel="stylesheet" href="style.css?v=10">
 <script>
   // Activa el aislamiento entre orígenes (necesario para usar varios hilos) mediante el service worker.
   if ('serviceWorker' in navigator) {
@@ -74,7 +74,7 @@
           <button class="icon-btn" id="micBtn" data-tip="Dictar" aria-label="Dictar"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
           <button class="icon-btn" id="speakSrcBtn" data-tip="Escuchar" aria-label="Escuchar"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
         </div>
-        <span class="count" id="count">0 / 5000</span>
+        <span class="count zero" id="count">0 / 5000</span>
       </div>
     </div>
 
@@ -218,6 +218,6 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<script type="module" src="app.js"></script>
+<script type="module" src="app.js?v=10"></script>
 </body>
 </html>

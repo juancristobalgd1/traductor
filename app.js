@@ -212,6 +212,12 @@ function renderLangs() {
     ? (state.detected ? L[state.detected].name : 'Detectar idioma')
     : L[state.src].name;
   els.tgtLabel.textContent = L[state.tgt].name;
+  for (const sp of [els.srcLabel, els.tgtLabel]) {
+    if (sp._last !== undefined && sp._last !== sp.textContent && !els.swap.parentElement.classList.contains('swapping')) {
+      sp.classList.remove('chg'); void sp.offsetWidth; sp.classList.add('chg');
+    }
+    sp._last = sp.textContent;
+  }
   els.src.lang = state.src !== 'auto' ? state.src : (state.detected || '');
   els.out.lang = state.tgt;
   els.out.dir = ['ar', 'he', 'fa', 'ur', 'ug'].includes(state.tgt) ? 'rtl' : 'ltr';
@@ -220,7 +226,10 @@ function renderLangs() {
 function renderOutput(text, streaming) {
   state.output = text;
   els.out.classList.toggle('streaming', !!streaming);
-  if (!text && !streaming) { els.out.innerHTML = '<span class="placeholder">Traducción</span>'; return; }
+  const has = !!text && !streaming;
+  els.copy.disabled = els.speakOut.disabled = els.share.disabled = !has;
+  if (!text && streaming) { els.out.innerHTML = '<span class="skel"></span><span class="skel"></span><span class="skel"></span>'; return; }
+  if (!text) { els.out.innerHTML = '<span class="placeholder">Traducción</span>'; return; }
   els.out.textContent = text;
 }
 function pushRecent(code) {
@@ -234,6 +243,7 @@ function openPicker(which) {
   picking = which;
   els.sheetTitle.textContent = which === 'src' ? 'Traducir del' : 'Traducir a';
   els.sheetSearch.value = '';
+  els.sheetList.classList.remove('filtering');
   fillPicker('');
   openSheet(els.sheet, which === 'src' ? els.srcBtn : els.tgtBtn);
   els.sheetList.scrollTop = 0;
@@ -257,7 +267,7 @@ function fillPicker(q) {
   html += list.map(opt).join('') || '<div class="empty">No encuentro ese idioma</div>';
   els.sheetList.innerHTML = html;
 }
-els.sheetSearch.addEventListener('input', e => fillPicker(e.target.value));
+els.sheetSearch.addEventListener('input', e => { els.sheetList.classList.add('filtering'); fillPicker(e.target.value); });
 els.sheetSearch.addEventListener('keydown', e => {
   const opts = [...els.sheetList.querySelectorAll('[data-code]')];
   let i = opts.findIndex(o => o.classList.contains('kb'));
@@ -292,6 +302,8 @@ els.swap.addEventListener('click', () => {
   const from = state.src === 'auto' ? (state.detected || null) : state.src;
   if (!from) { toast('Escribe algo primero para saber el idioma de origen'); return; }
   els.swap._r = (els.swap._r || 0) + 180; els.swap.style.setProperty('--r', els.swap._r + 'deg'); haptic();
+  const bar = els.swap.parentElement; bar.classList.remove('swapping'); void bar.offsetWidth; bar.classList.add('swapping');
+  clearTimeout(bar._t); bar._t = setTimeout(() => bar.classList.remove('swapping'), 400);
   const newSrc = state.tgt, newTgt = from;
   state.src = newSrc; state.tgt = newTgt; store.set('src', newSrc); store.set('tgt', newTgt);
   if (state.output) els.src.value = state.output;
@@ -531,6 +543,7 @@ function onInput(immediate) {
   const v = els.src.value;
   els.count.textContent = `${v.length.toLocaleString('es-ES')} / 5000`;
   els.count.classList.toggle('near', v.length >= 4800);
+  els.count.classList.toggle('zero', !v.length);
   els.clear.hidden = !v;
   state.detected = detect(v);
   // Como Google: si el idioma detectado coincide con el de destino, cambia el destino.
@@ -544,7 +557,10 @@ function onInput(immediate) {
 }
 els.src.addEventListener('input', () => onInput(false));
 els.src.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); scheduleTranslate(0); } });
-els.clear.addEventListener('click', () => { els.src.value = ''; onInput(); els.src.focus(); });
+els.clear.addEventListener('click', () => {
+  els.src.classList.remove('wipe'); void els.src.offsetWidth; els.src.classList.add('wipe');
+  els.src.value = ''; onInput(); els.src.focus(); haptic();
+});
 
 // ---------- Copiar, compartir, voz ----------
 els.copy.addEventListener('click', async () => {
@@ -557,8 +573,12 @@ if (navigator.share) {
 }
 function speak(text, code) {
   if (!('speechSynthesis' in window) || !text) return;
+  const btn = arguments[2];
+  if (btn?.classList.contains('speaking')) { speechSynthesis.cancel(); return; }
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
+  for (const b of [els.speakSrc, els.speakOut]) b.classList.remove('speaking');
+  if (btn) { btn.classList.add('speaking'); u.onend = u.onerror = () => btn.classList.remove('speaking'); }
   const tag = L[code]?.speech || code || '';
   u.lang = tag;
   const v = speechSynthesis.getVoices().find(v => v.lang.toLowerCase() === tag.toLowerCase())
@@ -566,8 +586,8 @@ function speak(text, code) {
   if (v) u.voice = v; else if (code) toast('Tu dispositivo puede no tener voz para este idioma');
   speechSynthesis.speak(u);
 }
-els.speakSrc.addEventListener('click', () => speak(els.src.value, state.src === 'auto' ? state.detected : state.src));
-els.speakOut.addEventListener('click', () => speak(state.output, state.tgt));
+els.speakSrc.addEventListener('click', () => speak(els.src.value, state.src === 'auto' ? state.detected : state.src, els.speakSrc));
+els.speakOut.addEventListener('click', () => speak(state.output, state.tgt, els.speakOut));
 
 const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 if (!Rec) els.mic.hidden = true;
@@ -628,10 +648,7 @@ els.clearHist.addEventListener('click', () => {
   store.set('history', []); renderHistory(); resetClearHist(); toast('Historial borrado');
 });
 els.infoBtn.addEventListener('click', () => openSheet(els.infoSheet, els.infoBtn));
-// La cabecera solo muestra su línea inferior cuando hay contenido debajo.
-const topBar = document.querySelector('.top');
-const onScroll = () => topBar.classList.toggle('scrolled', scrollY > 4);
-addEventListener('scroll', onScroll, { passive: true }); onScroll();
+
 
 // ---------- Arranque ----------
 renderLangs();

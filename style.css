@@ -9,7 +9,7 @@
   --accent:#0095f6; --accent-press:#007fd4; --accent-soft:rgba(0,149,246,.1);
   --danger:#e5484d; --ok:#1a7f37;
   --radius:18px; --r-md:12px; --r-sm:10px;
-  --ease:cubic-bezier(.2,.8,.2,1); --fast:.15s; --mid:.24s;
+  --ease:cubic-bezier(.2,.8,.2,1); --spring:cubic-bezier(.34,1.56,.64,1); --fast:.15s; --mid:.24s;
   --shadow-pop:0 12px 40px rgba(0,0,0,.12),0 2px 6px rgba(0,0,0,.06);
   --font:-apple-system,BlinkMacSystemFont,"SF Pro Text","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
   color-scheme:light;
@@ -40,11 +40,10 @@ a:hover{text-decoration:underline;text-underline-offset:2px}
 textarea:focus-visible,input:focus-visible{outline:none}
 
 /* ---------- Cabecera ---------- */
-.top{position:sticky;top:0;z-index:10;display:flex;align-items:center;justify-content:space-between;gap:8px;
+.top{position:fixed;top:0;left:0;right:0;z-index:30;display:flex;align-items:center;justify-content:space-between;gap:8px;
   height:calc(56px + env(safe-area-inset-top));padding:env(safe-area-inset-top) max(12px,env(safe-area-inset-right)) 0 max(16px,env(safe-area-inset-left));
-  background:color-mix(in srgb,var(--bg) 86%,transparent);backdrop-filter:saturate(1.8) blur(16px);-webkit-backdrop-filter:saturate(1.8) blur(16px);
-  border-bottom:1px solid transparent;transition:border-color var(--mid)}
-.top.scrolled{border-bottom-color:var(--border)}
+  background:var(--bg);border:0;box-shadow:none}
+body{padding-top:calc(56px + env(safe-area-inset-top))}
 .brand{display:flex;align-items:center;gap:10px;min-width:0}
 .logo{display:grid;place-items:center;color:var(--text)}
 .logo svg{width:28px;height:28px}
@@ -244,8 +243,9 @@ textarea::placeholder{color:var(--faint)}
 .drop strong{font-size:17px;font-weight:650;letter-spacing:-.01em}
 .drop>span{color:var(--muted);font-size:15px}
 .drop .tiny{font-size:12.5px!important;margin-top:14px!important;max-width:320px;line-height:1.45}
-.drop-icon{display:grid;place-items:center;width:52px;height:52px;border-radius:50%;background:var(--surface);color:var(--text);margin-bottom:12px;transition:transform var(--mid) var(--ease),color var(--fast)}
-.drop-icon svg{width:24px;height:24px}
+.drop-icon{display:grid;place-items:center;color:var(--text);margin-bottom:14px;background:none;transition:transform .35s var(--spring),color var(--fast)}
+.drop-icon svg{width:34px;height:34px;stroke-width:1.4}
+@media (hover:hover){.drop:hover .drop-icon{transform:translateY(-3px)}}
 .fmt-chips{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin-top:14px;max-width:340px}
 .fmt-chips span{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:500;color:var(--muted);background:var(--surface);padding:4px 10px;border-radius:999px}
 .fmt-chips span::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--fc)}
@@ -292,3 +292,47 @@ textarea::placeholder{color:var(--faint)}
 @media (prefers-reduced-motion:reduce){
   *,*::before,*::after{animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}
 }
+
+/* ---------- Microinteracciones ---------- */
+/* Rebote suave al soltar: rápido al pulsar, con muelle al volver. */
+.icon-btn,.lang-pill,.primary,.secondary,.doc-actions button,.stop,.install-btn,.danger,.swap{transition-property:background,color,opacity,transform,box-shadow;transition-duration:var(--fast),var(--fast),var(--fast),.38s,var(--fast);transition-timing-function:ease,ease,ease,var(--spring),ease}
+.icon-btn:active,.lang-pill:active,.primary:active,.secondary:active,.doc-actions button:active,.stop:active,.danger:active{transition-duration:var(--fast),var(--fast),var(--fast),.08s,var(--fast)}
+/* Herramientas de la traducción: atenuadas hasta que hay algo que copiar o escuchar. */
+.pane.out .tools .icon-btn:disabled{opacity:.28}
+/* Altavoz activo mientras habla. */
+.icon-btn.speaking{color:var(--accent)}
+.icon-btn.speaking svg{animation:speak 1s ease-in-out infinite}
+@keyframes speak{50%{transform:scale(1.08)}}
+/* Contador: aparece solo cuando escribes. */
+.count{opacity:1;transition:opacity var(--mid),color var(--fast)}
+.count.zero{opacity:0}
+/* Esqueleto mientras llega la primera palabra. */
+.skel{display:block;height:.62em;margin:.42em 0 .7em;border-radius:6px;background:linear-gradient(90deg,var(--surface-2) 0,color-mix(in srgb,var(--surface-2) 45%,var(--surface)) 50%,var(--surface-2) 100%);background-size:200% 100%;animation:shimmer 1.3s linear infinite}
+.skel:nth-child(2){width:72%}
+.skel:nth-child(3){width:46%}
+@keyframes shimmer{from{background-position:100% 0}to{background-position:-100% 0}}
+/* Barras de progreso con brillo que recorre. */
+.bar>div{position:relative;overflow:hidden}
+.bar>div::after{content:"";position:absolute;inset:0;background:linear-gradient(90deg,transparent,rgba(255,255,255,.45),transparent);transform:translateX(-100%);animation:sweep 1.6s ease-in-out infinite}
+@keyframes sweep{to{transform:translateX(100%)}}
+/* Cambio de idioma: el nombre entra con un leve desplazamiento. */
+.lang-pill span.chg{animation:label .32s var(--ease)}
+@keyframes label{from{opacity:0;transform:translateY(5px)}}
+.langbar.swapping #srcLangLabel{animation:fromR .36s var(--ease)}
+.langbar.swapping #tgtLangLabel{animation:fromL .36s var(--ease)}
+@keyframes fromR{from{opacity:0;transform:translateX(18px)}}
+@keyframes fromL{from{opacity:0;transform:translateX(-18px)}}
+/* Listas de las hojas: entran en cascada al abrir. */
+.sheet-backdrop.open .sheet-list>*{animation:item .3s var(--ease) both}
+.sheet-backdrop.open .sheet-list>*:nth-child(2){animation-delay:.02s}
+.sheet-backdrop.open .sheet-list>*:nth-child(3){animation-delay:.04s}
+.sheet-backdrop.open .sheet-list>*:nth-child(4){animation-delay:.06s}
+.sheet-backdrop.open .sheet-list>*:nth-child(5){animation-delay:.08s}
+.sheet-backdrop.open .sheet-list>*:nth-child(6){animation-delay:.1s}
+.sheet-backdrop.open .sheet-list>*:nth-child(n+7){animation-delay:.12s}
+@keyframes item{from{opacity:0;transform:translateY(6px)}}
+.sheet-list.filtering>*{animation:none!important}
+/* Texto que se borra con la X: se desvanece en lugar de desaparecer de golpe. */
+textarea.wipe{animation:wipe .18s ease}
+@keyframes wipe{from{opacity:.2}}
+@media (prefers-reduced-motion:reduce){.skel,.bar>div::after{animation:none}}
