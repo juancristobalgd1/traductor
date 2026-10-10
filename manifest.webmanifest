@@ -1,0 +1,12 @@
+{
+  "name": "Traductor",
+  "short_name": "Traductor",
+  "description": "Traductor privado en 33 idiomas que funciona en tu dispositivo.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#ffffff",
+  "lang": "es",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }]
+}
