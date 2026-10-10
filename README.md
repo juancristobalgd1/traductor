@@ -8,6 +8,14 @@ Traductor web en 33 idiomas (y 5 variantes) que funciona dentro del navegador co
 
 Atajo: Ctrl + Enter para traducir al momento. También acepta `?q=texto&to=en` en la URL.
 
-## Documentos de Word
+## Documentos
 
-En la pestaña **Documentos** puedes traducir un `.docx` entero sin que salga de tu dispositivo. Se conservan el formato (negritas, cursivas, colores, enlaces), los estilos, las listas, las tablas, los encabezados, los pies de página y las imágenes. El archivo traducido se descarga como `nombre (Idioma).docx`.
+En la pestaña **Documentos** traduces un archivo entero sin que salga de tu dispositivo:
+
+- **Word (.docx)**: formato, estilos, listas, tablas, encabezados, pies de página e imágenes.
+- **PowerPoint (.pptx)**: diapositivas, notas del orador, SmartArt y gráficos, con su formato.
+- **Excel (.xlsx)**: textos de las celdas (incluido texto enriquecido); números, fórmulas, correos y enlaces no se tocan.
+- **Markdown (.md)**: encabezados, listas, tablas, enlaces y negritas; el código y las URLs se protegen.
+- **Texto y subtítulos (.txt, .srt, .vtt)**: línea a línea; los tiempos de los subtítulos se conservan.
+
+El archivo traducido se descarga como `nombre (Idioma).ext`.

@@ -109,16 +109,17 @@
 
   <section class="docs" id="docsPane" hidden>
     <label class="drop" id="drop">
-      <input type="file" id="docInput" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+      <input type="file" id="docInput" accept=".docx,.pptx,.xlsx,.md,.markdown,.txt,.srt,.vtt" hidden>
       <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 18v-6M9 15l3-3 3 3"/></svg></div>
-      <strong>Elige un documento de Word</strong>
-      <span>o arrástralo aquí · .docx</span>
-      <span class="tiny">Se mantienen el formato, las tablas, los encabezados y las imágenes.</span>
+      <strong>Elige un documento</strong>
+      <span>o arrástralo aquí</span>
+      <div class="fmt-chips"><span style="--fc:#2b579a">Word</span><span style="--fc:#c43e1c">PowerPoint</span><span style="--fc:#217346">Excel</span><span style="--fc:#4a4a4a">Markdown</span><span style="--fc:#6b6b6b">TXT</span><span style="--fc:#6b6b6b">SRT</span></div>
+      <span class="tiny">Se mantienen el formato, las tablas, las diapositivas y las imágenes. Nada sale de tu dispositivo.</span>
     </label>
 
     <div class="doc-card" id="docCard" hidden>
       <div class="doc-head">
-        <div class="doc-file"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></div>
+        <div class="doc-file" id="docIcon"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></div>
         <div class="doc-info"><div class="doc-name" id="docName"></div><div class="doc-meta" id="docMeta"></div></div>
         <button class="icon-btn" id="docRemove" title="Quitar documento" aria-label="Quitar documento"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>

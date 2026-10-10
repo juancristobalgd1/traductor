@@ -599,18 +599,40 @@ if (params.get('q')) { els.src.value = params.get('q'); onInput(); }
 
 
 // =====================================================================
-// ---------- Documentos de Word (.docx) conservando el formato ----------
-// Un .docx es un zip con XML. Se traduce párrafo a párrafo; los tramos con
-// formato distinto (negrita, enlaces, colores…) se marcan con etiquetas
-// <x1>…</x1> para que el modelo las respete y se devuelven a su sitio.
+// ---------- Documentos: Word, PowerPoint, Excel, Markdown, texto ----------
+// Office (.docx/.pptx/.xlsx) es un zip con XML: se traduce párrafo a párrafo y
+// los tramos con formato distinto se marcan con <x1>…</x1> para devolverlos a
+// su sitio. Markdown y texto se traducen línea a línea protegiendo el código,
+// los enlaces y las etiquetas.
 // =====================================================================
 const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const A_NS = 'http://schemas.openxmlformats.org/drawingml/2006/main';
+const S_NS = 'http://schemas.openxmlformats.org/spreadsheetml/2006/main';
 const XML_NS = 'http://www.w3.org/XML/1998/namespace';
-const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const OOXML = 'application/vnd.openxmlformats-officedocument.';
+const FORMATS = {
+  docx: { name: 'Word', color: '#2b579a', mime: OOXML + 'wordprocessingml.document', kind: 'ooxml', unit: 'párrafos', required: 'word/document.xml',
+    parts: /^word\/(document|header\d*|footer\d*|footnotes|endnotes|comments)\.xml$/,
+    cfg: { ns: W_NS, para: ['p'], run: 'r', text: 't', rPr: 'rPr', inner: ['tab', 'br', 'cr', 'drawing', 'pict', 'fldChar', 'ptab'], sep: [] } },
+  pptx: { name: 'PowerPoint', color: '#c43e1c', mime: OOXML + 'presentationml.presentation', kind: 'ooxml', unit: 'textos', required: 'ppt/presentation.xml',
+    parts: /^ppt\/(slides\/slide\d+|notesSlides\/notesSlide\d+|diagrams\/(data|drawing)\d+|charts\/chart\d+)\.xml$/,
+    cfg: { ns: A_NS, para: ['p'], run: 'r', text: 't', rPr: 'rPr', inner: [], sep: ['br'], langAttr: true } },
+  xlsx: { name: 'Excel', color: '#217346', mime: OOXML + 'spreadsheetml.sheet', kind: 'ooxml', unit: 'textos', required: 'xl/workbook.xml',
+    parts: /^xl\/(sharedStrings|worksheets\/sheet\d+)\.xml$/,
+    cfg: { ns: S_NS, para: ['si', 'is'], run: 'r', text: 't', rPr: 'rPr', inner: [], sep: [], directRuns: true, directText: true } },
+  md:  { name: 'Markdown', color: '#4a4a4a', mime: 'text/markdown', kind: 'md', unit: 'líneas' },
+  txt: { name: 'Texto', color: '#6b6b6b', mime: 'text/plain', kind: 'txt', unit: 'líneas' },
+  srt: { name: 'Subtítulos', color: '#6b6b6b', mime: 'application/x-subrip', kind: 'txt', unit: 'líneas' },
+  vtt: { name: 'Subtítulos', color: '#6b6b6b', mime: 'text/vtt', kind: 'txt', unit: 'líneas' },
+};
+const EXT_ALIAS = { markdown: 'md', text: 'txt' };
+const OLD_FORMATS = { doc: '.docx', ppt: '.pptx', xls: '.xlsx' };
+const extOf = name => { const e = (name.match(/\.([a-z0-9]+)$/i) || [])[1]?.toLowerCase() || ''; return EXT_ALIAS[e] || e; };
+
 const D = id => document.getElementById(id);
 const del = {
   modes: D('modes'), panes: document.querySelector('.panes'), pane: D('docsPane'), drop: D('drop'), input: D('docInput'),
-  card: D('docCard'), name: D('docName'), meta: D('docMeta'), remove: D('docRemove'), progress: D('docProgress'),
+  card: D('docCard'), icon: D('docIcon'), name: D('docName'), meta: D('docMeta'), remove: D('docRemove'), progress: D('docProgress'),
   bar: D('docBar'), status: D('docStatus'), eta: D('docEta'), preview: D('docPreview'), translate: D('docTranslate'),
   stop: D('docStop'), download: D('docDownload'), share: D('docShare'),
 };
@@ -634,51 +656,182 @@ function loadJSZip() {
     sc.onload = () => ok(window.JSZip); sc.onerror = ko; document.head.appendChild(sc);
   });
 }
-const isW = (n, name) => n && n.nodeType === 1 && n.namespaceURI === W_NS && n.localName === name;
-function closestPara(n) { for (let x = n.parentNode; x; x = x.parentNode) if (isW(x, 'p')) return x; return null; }
 
-async function parseDocx(file) {
+// ---------- Office (XML) ----------
+const numOrder = n => n.replace(/\d+/g, d => d.padStart(6, '0'));
+async function parseOoxml(file, fmt) {
   const JSZip = await loadJSZip();
   const zip = await JSZip.loadAsync(file);
-  const names = Object.keys(zip.files).filter(n => /^word\/(document|header\d*|footer\d*|footnotes|endnotes|comments)\.xml$/.test(n));
-  if (!names.includes('word/document.xml')) throw new Error('no-docx');
+  if (!zip.file(fmt.required)) throw new Error('bad-file');
+  const cfg = fmt.cfg, ns = cfg.ns;
+  const isEl = (n, names) => n && n.nodeType === 1 && n.namespaceURI === ns && (Array.isArray(names) ? names.includes(n.localName) : n.localName === names);
+  const closestPara = n => { for (let x = n.parentNode; x; x = x.parentNode) if (isEl(x, cfg.para)) return x; return null; };
+  const names = Object.keys(zip.files).filter(n => fmt.parts.test(n)).sort((a, b) => numOrder(a).localeCompare(numOrder(b)));
   const ser = new XMLSerializer();
-  const parts = [], paras = [];
+  const parts = [], units = [];
   for (const name of names) {
     const raw = await zip.file(name).async('string');
     const doc = new DOMParser().parseFromString(raw, 'application/xml');
     if (doc.getElementsByTagName('parsererror').length) continue;
     const part = { name, doc, decl: (raw.match(/^<\?xml[^>]*\?>/) || [''])[0] };
     parts.push(part);
-    for (const p of Array.from(doc.getElementsByTagNameNS(W_NS, 'p'))) {
+    const paras = cfg.para.flatMap(p => Array.from(doc.getElementsByTagNameNS(ns, p)));
+    for (const p of paras) {
       const segs = []; let cur = null;
-      for (const r of Array.from(p.getElementsByTagNameNS(W_NS, 'r'))) {
-        if (closestPara(r) !== p) continue;                    // pertenece a un cuadro de texto interior
+      if (cfg.directText) {
+        const ts = Array.from(p.childNodes).filter(k => isEl(k, cfg.text));
+        if (ts.length) segs.push({ key: '', ts, text: ts.map(t => t.textContent).join('') });
+      }
+      const els = Array.from(p.getElementsByTagNameNS(ns, '*')).filter(e =>
+        (e.localName === cfg.run || cfg.sep.includes(e.localName)) && closestPara(e) === p && (!cfg.directRuns || e.parentNode === p));
+      for (const r of els) {
+        if (r.localName !== cfg.run) { cur = null; continue; }
         const kids = Array.from(r.childNodes);
-        const ts = kids.filter(k => isW(k, 't'));
-        const breaks = kids.some(k => isW(k, 'tab') || isW(k, 'br') || isW(k, 'drawing') || isW(k, 'pict') || isW(k, 'fldChar'));
+        const ts = kids.filter(k => isEl(k, cfg.text));
+        const breaks = kids.some(k => isEl(k, cfg.inner));
         if (!ts.length) { if (breaks) cur = null; continue; }
-        const rPr = kids.find(k => isW(k, 'rPr'));
-        const key = (rPr ? ser.serializeToString(rPr) : '') + '|' + r.parentNode.localName;
+        const rPr = kids.find(k => isEl(k, cfg.rPr));
+        let key = (rPr ? ser.serializeToString(rPr) : '') + '|' + r.parentNode.localName;
+        if (cfg.langAttr) key = key.replace(/\s(lang|altLang)="[^"]*"/g, '');
         const text = ts.map(t => t.textContent).join('');
         if (cur && cur.key === key) { cur.ts.push(...ts); cur.text += text; }
         else { cur = { key, ts: [...ts], text }; segs.push(cur); }
         if (breaks) cur = null;
       }
       const text = segs.map(x => x.text).join('');
-      if (!/\p{L}/u.test(text)) continue;
-      paras.push({ part, segs, text });
+      if (!/\p{L}/u.test(text) || /^\s*(https?:\/\/\S+|[\w.+-]+@[\w-]+\.[\w.]+)\s*$/.test(text)) continue;
+      units.push({ segs, text });
     }
   }
-  const sample = paras.slice(0, 40).map(x => x.text).join('\n').slice(0, 2000);
-  return { zip, parts, paras, chars: paras.reduce((a, x) => a + x.text.length, 0), lang: detect(sample) };
+  const slides = names.filter(n => /slides\/slide\d+\.xml$/.test(n)).length;
+  const sheets = Object.keys(zip.files).filter(n => /^xl\/worksheets\/sheet\d+\.xml$/.test(n)).length;
+  return {
+    units, extraMeta: slides ? `${slides} diapositiva${slides > 1 ? 's' : ''}` : sheets ? `${sheets} hoja${sheets > 1 ? 's' : ''}` : '',
+    build: async tgt => {
+      const tag = L[tgt]?.speech || tgt;
+      for (const part of parts) {
+        if (cfg.langAttr) for (const el of Array.from(part.doc.getElementsByTagNameNS(ns, '*')))
+          if (/^(rPr|endParaRPr|defRPr)$/.test(el.localName) && el.hasAttribute('lang')) el.setAttribute('lang', tag);
+        zip.file(part.name, serializeXml(part));
+      }
+      if (fmt === FORMATS.docx) await setWordLang(zip, tag);
+      return zip.generateAsync({ type: 'blob', mimeType: fmt.mime, compression: 'DEFLATE' });
+    },
+  };
+}
+function serializeXml(part) {
+  let xml = new XMLSerializer().serializeToString(part.doc);
+  if (part.decl && !xml.startsWith('<?xml')) xml = part.decl + '\n' + xml;
+  return xml;
+}
+async function setWordLang(zip, tag) {
+  const st = zip.file('word/styles.xml'); if (!st) return;
+  const raw = await st.async('string');
+  const doc = new DOMParser().parseFromString(raw, 'application/xml');
+  if (doc.getElementsByTagName('parsererror').length) return;
+  for (const el of Array.from(doc.getElementsByTagNameNS(W_NS, 'lang')))
+    if (el.hasAttributeNS(W_NS, 'val')) el.setAttributeNS(W_NS, 'w:val', tag);
+  zip.file('word/styles.xml', serializeXml({ doc, decl: (raw.match(/^<\?xml[^>]*\?>/) || [''])[0] }));
 }
 
+// ---------- Texto y Markdown ----------
+async function readText(file) {
+  const buf = new Uint8Array(await file.arrayBuffer());
+  if (buf[0] === 0xFF && buf[1] === 0xFE) return { text: new TextDecoder('utf-16le').decode(buf.subarray(2)), bom: true };
+  if (buf[0] === 0xFE && buf[1] === 0xFF) return { text: new TextDecoder('utf-16be').decode(buf.subarray(2)), bom: true };
+  const bom = buf[0] === 0xEF && buf[1] === 0xBB && buf[2] === 0xBF;
+  try { return { text: new TextDecoder('utf-8', { fatal: true }).decode(buf.subarray(bom ? 3 : 0)), bom }; }
+  catch { return { text: new TextDecoder('windows-1252').decode(buf), bom: false }; }
+}
+// Un trozo de línea traducible: el texto vive en obj.textContent, como en Office.
+function textPiece(str, units, extra = {}) {
+  if (!/\p{L}/u.test(str)) return str;
+  const lead = str.match(/^\s*/)[0], trail = str.slice(lead.length).match(/\s*$/)[0];
+  const core = str.slice(lead.length, str.length - trail.length);
+  const obj = { textContent: core };
+  units.push({ text: core, segs: [{ ts: [obj], text: core }], ...extra });
+  return { lead, obj, trail };
+}
+const renderPiece = x => typeof x === 'string' ? x : x.lead + x.obj.textContent + x.trail;
+function textResult(lines, eol, bom, mime) {
+  const body = lines.map(l => Array.isArray(l) ? l.map(renderPiece).join('') : renderPiece(l)).join(eol);
+  return new Blob([bom ? '\uFEFF' : '', body], { type: mime + ';charset=utf-8' });
+}
+
+async function parseTxt(file, fmt, ext) {
+  const { text, bom } = await readText(file);
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const units = [];
+  const subs = ext === 'srt' || ext === 'vtt';
+  let vttBlock = false;
+  const lines = text.split(/\r?\n/).map(line => {
+    if (subs) {
+      if (/^\s*$/.test(line)) { vttBlock = false; return line; }
+      if (/^\s*\d+\s*$/.test(line) || /-->/.test(line) || /^WEBVTT\b/.test(line)) return line;
+      if (/^(NOTE|STYLE|REGION)\b/.test(line)) vttBlock = true;
+      if (vttBlock) return line;
+      return textPiece(line, units, { md: true }); // protege <i>, <b> de los subtítulos
+    }
+    return textPiece(line, units);
+  });
+  return { units, build: async () => textResult(lines, eol, bom, fmt.mime) };
+}
+
+async function parseMd(file, fmt) {
+  const { text, bom } = await readText(file);
+  const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const units = [];
+  const src = text.split(/\r?\n/);
+  let fence = null, front = /^---\s*$/.test(src[0] || ''), math = false, comment = false;
+  const lines = src.map((line, i) => {
+    if (front) { if (i > 0 && /^(---|\.\.\.)\s*$/.test(line)) front = false; return line; }
+    const f = line.match(/^\s*(`{3,}|~{3,})/);
+    if (fence) { if (f && f[1][0] === fence[0] && f[1].length >= fence.length && !line.slice(line.indexOf(f[1]) + f[1].length).trim()) fence = null; return line; }
+    if (f) { fence = f[1]; return line; }
+    if (/^\s*\$\$\s*$/.test(line)) { math = !math; return line; }
+    if (math) return line;
+    if (comment) { if (line.includes('-->')) comment = false; return line; }
+    if (/^\s*<!--/.test(line)) { if (!line.includes('-->')) comment = true; return line; }
+    if (/^\s*\[[^\]]+\]:\s*\S+/.test(line)) return line;                      // definición de enlace
+    if (/^\s*<\/?[a-zA-Z][^>]*>\s*$/.test(line)) return line;                   // línea solo con HTML
+    if (/^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)+\|?\s*$/.test(line)) return line; // separador de tabla
+    if (/^\s*\|.*\|\s*$/.test(line)) {                                           // fila de tabla
+      const cells = line.split(/(?<!\\)\|/);
+      return cells.map((c, j) => (j === 0 || j === cells.length - 1) ? c : textPiece(c, units, { md: true })).flatMap((c, j, a) => j < a.length - 1 ? [c, '|'] : [c]);
+    }
+    const m = line.match(/^(\s*(?:>\s*)*(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+(?:\[[ xX]\]\s+)?)?)([\s\S]*)$/);
+    return [m[1], textPiece(m[2], units, { md: true })];
+  });
+  return { units, build: async () => textResult(lines, eol, bom, fmt.mime) };
+}
+
+// Protege código, enlaces, etiquetas y URLs con {{n}} (el modelo los respeta).
+function mdMask(s) {
+  const masks = [];
+  const put = v => `{{${masks.push(v) - 1}}}`;
+  s = s.replace(/(`+)[\s\S]*?\1/g, put)
+    .replace(/\]\((?:[^()\s]|\([^()\s]*\))*(?:\s+"[^"]*")?\)/g, m => ']' + put(m.slice(1)))
+    .replace(/<\/?[A-Za-z][^>]*>|<https?:[^>]+>|<[^@\s>]+@[^>\s]+>/g, put)
+    .replace(/\bhttps?:\/\/[^\s)>\]]+/g, put)
+    .replace(/(?<![\w$])\$[^$\n]+\$(?![\w$])/g, put)
+    .replace(/&[a-zA-Z]+;|&#\d+;/g, put);
+  return { masked: s, masks };
+}
+function mdUnmask(out, masks) {
+  const seen = new Set();
+  const res = out.replace(/\{\{\s*(\d+)\s*\}\}/g, (m, n) => { n = +n; if (n >= masks.length) return ''; seen.add(n); return masks[n]; });
+  return seen.size === masks.length ? res : null;
+}
+function mdPrompt(data, tgt) {
+  return `### Task\nTranslate the user-facing text within the following Markdown data into ${L[tgt].en}.\n\n### Strict Rules\n1. **Structure Preservation:** You MUST preserve the original Markdown data structure, nesting, hierarchy, and indentation exactly as they are.\n2. **Selective Translation:** Translate ONLY the visible, user-facing text content/values.\n3. **Strict Non-Translation:** NEVER translate or alter code tags, keys, properties, object names, or variable placeholders (such as {{0}}, {{1}}). Leave them exactly in their original form.\n\n### Source Data\n${data}`;
+}
+const stripFence = s => s.replace(/^```[a-z]*\n([\s\S]*?)\n```$/i, '$1').trim();
+
+// ---------- Motor de traducción común ----------
 function setSegText(seg, text) {
   seg.ts.forEach((t, i) => { t.textContent = i === 0 ? text : ''; });
-  seg.ts[0].setAttributeNS(XML_NS, 'xml:space', 'preserve');
+  if (seg.ts[0].setAttributeNS) seg.ts[0].setAttributeNS(XML_NS, 'xml:space', 'preserve');
 }
-
 function taggedPrompt(data, tgt) {
   return `### Task\nTranslate the user-facing text within the following XML data into ${L[tgt].en}.\n\n### Strict Rules\n1. **Structure Preservation:** You MUST preserve the original XML data structure, nesting, hierarchy, and indentation exactly as they are.\n2. **Selective Translation:** Translate ONLY the visible, user-facing text content/values.\n3. **Strict Non-Translation:** NEVER translate or alter code tags, keys, properties, object names, or variable placeholders. Leave them exactly in their original English/code form.\n\n### Source Data\n${data}`;
 }
@@ -704,13 +857,11 @@ async function llm(prompt, maxTokens, signal, onDelta) {
   return acc.trim();
 }
 
-// Traduce un texto plano (partiéndolo si es largo).
 async function translatePlain(text, tgt, src, signal, onDelta) {
   const key = `${tgt}\u0000${text}`;
   if (docCache.has(key)) return docCache.get(key);
-  const pieces = segment(text);
   const out = [];
-  for (const pc of pieces) {
+  for (const pc of segment(text)) {
     if ('sep' in pc) { out.push(pc.sep); continue; }
     const lead = pc.text.match(/^\s*/)[0], trail = pc.text.match(/\s*$/)[0], core = pc.text.trim();
     const done = out.join('');
@@ -722,23 +873,43 @@ async function translatePlain(text, tgt, src, signal, onDelta) {
   return res;
 }
 
-async function translatePara(para, tgt, src, signal, onDelta) {
-  const live = para.segs.filter(x => /\S/.test(x.text));
+async function translateMdText(text, tgt, src, signal, onDelta) {
+  const key = `${tgt}\u0002${text}`;
+  if (docCache.has(key)) return docCache.get(key);
+  const { masked, masks } = mdMask(text);
+  let res = null;
+  if (!masks.length && !/[*_~#>\[\]]/.test(masked)) res = await translatePlain(text, tgt, src, signal, onDelta);
+  else {
+    const show = a => onDelta?.(a.replace(/\{\{\s*(\d+)\s*\}\}/g, (m, n) => masks[+n] ?? ''));
+    res = mdUnmask(stripFence(await llm(mdPrompt(masked, tgt), masked.length * 3 + 96, signal, show)), masks);
+    if (res == null) res = mdUnmask(await llm(buildPrompt(masked, tgt, src), masked.length * 3 + 64, signal, show), masks);
+    if (res == null) res = text; // no respetó lo protegido: mejor dejar la línea como estaba
+  }
+  docCache.set(key, res);
+  return res;
+}
+
+async function translateUnit(unit, tgt, src, signal, onDelta) {
+  const live = unit.segs.filter(x => /\S/.test(x.text));
   if (!live.length) return;
   const edge = t => [t.match(/^\s*/)[0], t.match(/\s*$/)[0]];
-  if (live.length === 1 || para.text.length > 1500) {
-    // Un solo formato (lo normal): todo el párrafo de una vez.
+  if (unit.md) {
+    const res = await translateMdText(unit.text, tgt, src, signal, onDelta);
+    setSegText(unit.segs[0], res);
+    return res;
+  }
+  if (live.length === 1 || unit.text.length > 1500) {
     const first = live[0];
-    const [lead, trail] = edge(para.text);
-    const res = await translatePlain(para.text.trim(), tgt, src, signal, onDelta);
-    para.segs.forEach(x => { if (x !== first) setSegText(x, ''); });
+    const [lead, trail] = edge(unit.text);
+    const res = await translatePlain(unit.text.trim(), tgt, src, signal, onDelta);
+    unit.segs.forEach(x => { if (x !== first) setSegText(x, ''); });
     setSegText(first, lead + res + trail);
     return lead + res + trail;
   }
-  // Varios formatos: etiquetas para conservar negritas, enlaces, etc.
+  // Varios formatos en el párrafo: etiquetas para conservar negritas, enlaces, etc.
   const ids = new Map();
   let data = '';
-  para.segs.forEach((x, i) => {
+  unit.segs.forEach((x, i) => {
     if (!/\S/.test(x.text)) { data += x.text; return; }
     const [lead, trail] = edge(x.text);
     ids.set(i, [lead, trail]);
@@ -752,53 +923,35 @@ async function translatePara(para, tgt, src, signal, onDelta) {
   }
   const found = new Map();
   for (const m of out.matchAll(/<x(\d+)>([\s\S]*?)<\/x\1>/g)) found.set(+m[1], m[2]);
-  const ok = [...ids.keys()].every(i => found.has(i) && /\S/.test(found.get(i)));
-  if (ok) {
-    ids.forEach(([lead, trail], i) => setSegText(para.segs[i], lead + found.get(i).trim() + trail));
+  if ([...ids.keys()].every(i => found.has(i) && /\S/.test(found.get(i)))) {
+    ids.forEach(([lead, trail], i) => setSegText(unit.segs[i], lead + found.get(i).trim() + trail));
   } else {
-    // El modelo no respetó las etiquetas: se conserva el formato del primer tramo.
+    // No respetó las etiquetas: todo el párrafo con el formato del primer tramo.
     const plain = out.replace(/<\/?x\d+>/g, '').replace(/\s+/g, ' ').trim()
-      || await translatePlain(para.text.trim(), tgt, src, signal, onDelta);
+      || await translatePlain(unit.text.trim(), tgt, src, signal, onDelta);
     const first = live[0];
-    para.segs.forEach(x => { if (x !== first && /\S/.test(x.text)) setSegText(x, ''); });
-    const [lead, trail] = edge(para.text);
+    unit.segs.forEach(x => { if (x !== first && /\S/.test(x.text)) setSegText(x, ''); });
+    const [lead, trail] = edge(unit.text);
     setSegText(first, lead + plain + trail);
   }
-  return para.segs.map(x => x.ts.map(t => t.textContent).join('')).join('');
+  return unit.segs.map(x => x.ts.map(t => t.textContent).join('')).join('');
 }
 
-function setDocLang(parts, tgt) {
-  const tag = L[tgt]?.speech || tgt;
-  for (const part of parts) for (const el of Array.from(part.doc.getElementsByTagNameNS(W_NS, 'lang'))) {
-    if (el.hasAttributeNS(W_NS, 'val')) el.setAttributeNS(W_NS, 'w:val', tag);
-  }
+async function parseFile(file) {
+  const ext = extOf(file.name), fmt = FORMATS[ext];
+  const parsed = fmt.kind === 'ooxml' ? await parseOoxml(file, fmt)
+    : fmt.kind === 'md' ? await parseMd(file, fmt)
+    : fmt.kind === 'pdf' ? await parsePdf(file, fmt)
+    : await parseTxt(file, fmt, ext);
+  const sample = parsed.units.slice(0, 60).map(x => x.text).join('\n').slice(0, 2000);
+  parsed.lang = detect(sample);
+  parsed.chars = parsed.units.reduce((a, x) => a + x.text.length, 0);
+  parsed.fmt = fmt; parsed.ext = ext;
+  return parsed;
 }
 
-async function buildDocx(parsed, tgt) {
-  const ser = new XMLSerializer();
-  for (const part of parsed.parts) {
-    let xml = ser.serializeToString(part.doc);
-    if (part.decl && !xml.startsWith('<?xml')) xml = part.decl + '\n' + xml;
-    parsed.zip.file(part.name, xml);
-  }
-  // Idioma del documento para el corrector de Word
-  const st = parsed.zip.file('word/styles.xml');
-  if (st) {
-    const raw = await st.async('string');
-    const doc = new DOMParser().parseFromString(raw, 'application/xml');
-    if (!doc.getElementsByTagName('parsererror').length) {
-      setDocLang([{ doc }], tgt);
-      let xml = new XMLSerializer().serializeToString(doc);
-      const decl = (raw.match(/^<\?xml[^>]*\?>/) || [''])[0];
-      if (decl && !xml.startsWith('<?xml')) xml = decl + '\n' + xml;
-      parsed.zip.file('word/styles.xml', xml);
-    }
-  }
-  return parsed.zip.generateAsync({ type: 'blob', mimeType: DOCX_MIME, compression: 'DEFLATE' });
-}
-
+// ---------- Interfaz ----------
 const fmtSize = b => b > 1048576 ? `${(b / 1048576).toFixed(1).replace('.', ',')} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
-const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 function resetDocUI() {
   del.progress.hidden = true; del.preview.hidden = true; del.preview.innerHTML = '';
@@ -809,17 +962,21 @@ function resetDocUI() {
 
 async function openDoc(file) {
   if (!file) return;
-  if (!/\.docx$/i.test(file.name)) { toast(/\.doc$/i.test(file.name) ? 'Guárdalo como .docx en Word y vuelve a probar' : 'Por ahora solo documentos de Word (.docx)'); return; }
+  const ext = extOf(file.name);
+  if (OLD_FORMATS[ext]) { toast(`Guárdalo como ${OLD_FORMATS[ext]} y vuelve a probar`); return; }
+  if (!FORMATS[ext]) { toast('Formatos: Word, PowerPoint, Excel, PDF, Markdown y texto'); return; }
   if (docBusy) { toast('Espera a que termine el documento actual'); return; }
   setMode('doc');
+  const fmt = FORMATS[ext];
   del.drop.hidden = true; del.card.hidden = false; resetDocUI();
+  del.icon.style.setProperty('--fc', fmt.color); del.icon.dataset.ext = ext.toUpperCase();
   del.name.textContent = file.name; del.meta.textContent = 'Leyendo…'; del.translate.disabled = true;
   try {
-    const parsed = await parseDocx(file);
+    const parsed = await parseFile(file);
     docState.file = file; docState.parsed = parsed;
-    if (!parsed.paras.length) { del.meta.textContent = 'No encontré texto para traducir'; return; }
-    const words = parsed.paras.reduce((a, x) => a + (x.text.match(/\S+/g) || []).length, 0);
-    del.meta.textContent = `${fmtSize(file.size)} · ${words.toLocaleString('es-ES')} palabras · ${parsed.paras.length} párrafos`;
+    if (!parsed.units.length) { del.meta.textContent = parsed.emptyHint || 'No encontré texto para traducir'; return; }
+    const words = parsed.units.reduce((a, x) => a + (x.text.match(/\S+/g) || []).length, 0);
+    del.meta.textContent = [fmtSize(file.size), parsed.extraMeta, `${words.toLocaleString('es-ES')} palabras`].filter(Boolean).join(' · ');
     state.detected = parsed.lang;
     if (state.src === 'auto' && parsed.lang && parsed.lang === state.tgt) {
       state.tgt = state.recent.find(c => c !== parsed.lang && L[c]) || (parsed.lang === 'es' ? 'en' : 'es'); store.set('tgt', state.tgt);
@@ -828,7 +985,7 @@ async function openDoc(file) {
     del.translate.disabled = false;
   } catch (e) {
     console.error(e);
-    del.meta.textContent = 'No pude abrir este archivo. ¿Es un .docx válido?';
+    del.meta.textContent = e?.message === 'pdf-locked' ? 'Este PDF tiene contraseña' : `No pude abrir este archivo. ¿Es un ${fmt.name} válido?`;
   }
 }
 
@@ -839,7 +996,7 @@ async function translateDoc() {
     toast('Primero descarga el traductor'); return;
   }
   job?.ctrl.abort();
-  const parsed = await parseDocx(docState.file);   // copia limpia cada vez
+  const parsed = await parseFile(docState.file);   // copia limpia cada vez
   docState.parsed = parsed;
   const tgt = state.tgt;
   const src = state.src === 'auto' ? parsed.lang : state.src;
@@ -848,11 +1005,11 @@ async function translateDoc() {
   del.translate.hidden = true; del.stop.hidden = false; del.download.hidden = true; del.share.hidden = true;
   del.progress.hidden = false; del.preview.hidden = false; del.preview.innerHTML = '';
   let lock = null; try { lock = await navigator.wakeLock?.request('screen'); } catch {}
-  const total = parsed.chars; let doneChars = 0; const t0 = performance.now(); let failed = 0;
+  const units = parsed.units, total = parsed.chars;
+  let doneChars = 0, failed = 0; const t0 = performance.now();
   const update = i => {
-    const pct = total ? (doneChars / total) * 100 : 0;
-    del.bar.style.width = pct.toFixed(1) + '%';
-    del.status.textContent = `Párrafo ${Math.min(i + 1, parsed.paras.length)} de ${parsed.paras.length}`;
+    del.bar.style.width = (total ? (doneChars / total) * 100 : 0).toFixed(1) + '%';
+    del.status.textContent = `${Math.min(i + 1, units.length)} de ${units.length} ${parsed.fmt.unit}`;
     const secs = (performance.now() - t0) / 1000;
     if (doneChars > 0 && secs > 8) {
       const left = Math.round(secs * (total - doneChars) / doneChars);
@@ -860,14 +1017,16 @@ async function translateDoc() {
     } else del.eta.textContent = '';
   };
   try {
-    for (let i = 0; i < parsed.paras.length; i++) {
-      const para = parsed.paras[i];
+    for (let i = 0; i < units.length; i++) {
+      const unit = units[i];
       update(i);
-      const p = document.createElement('p'); p.className = 'cur'; p.textContent = para.text;
-      del.preview.appendChild(p); p.scrollIntoView({ block: 'nearest' });
+      const p = document.createElement('p'); p.className = 'cur'; p.textContent = unit.text;
+      del.preview.appendChild(p);
+      if (del.preview.children.length > 400) del.preview.firstElementChild.remove();
+      p.scrollIntoView({ block: 'nearest' });
       try {
-        const res = await translatePara(para, tgt, src, ctrl.signal, a => { p.textContent = a; });
-        p.textContent = res ?? para.text;
+        const res = await translateUnit(unit, tgt, src, ctrl.signal, a => { p.textContent = a; });
+        p.textContent = res ?? unit.text;
       } catch (e) {
         if (e instanceof Degenerate) {
           if (currentGpu) {
@@ -875,20 +1034,21 @@ async function translateDoc() {
             toast('Tu GPU no traduce bien. Cambio al procesador, vuelve a pulsar Traducir.');
             state.ready = false; loadModel(); throw new DOMException('aborted', 'AbortError');
           }
-          failed++; p.textContent = para.text;
+          failed++; p.textContent = unit.text;
         } else throw e;
       }
       p.classList.remove('cur');
-      doneChars += para.text.length;
+      doneChars += unit.text.length;
     }
-    update(parsed.paras.length - 1);
+    update(units.length - 1);
     del.status.textContent = 'Preparando el archivo…'; del.eta.textContent = '';
-    const blob = await buildDocx(parsed, tgt);
-    const base = docState.file.name.replace(/\.docx$/i, '');
-    docState.result = new File([blob], `${base} (${L[tgt].name}).docx`, { type: DOCX_MIME });
+    const blob = await parsed.build(tgt);
+    const base = docState.file.name.replace(/\.[^.]+$/, '');
+    const outExt = docState.file.name.match(/\.[^.]+$/)?.[0] || '.' + parsed.ext;
+    docState.result = new File([blob], `${base} (${L[tgt].name})${outExt}`, { type: blob.type || parsed.fmt.mime });
     del.bar.style.width = '100%';
     const mins = Math.round((performance.now() - t0) / 60000);
-    del.status.textContent = failed ? `Listo · ${failed} párrafo${failed > 1 ? 's' : ''} sin traducir` : `Listo · traducido al ${L[tgt].name.toLowerCase()}`;
+    del.status.textContent = failed ? `Listo · ${failed} fragmento${failed > 1 ? 's' : ''} sin traducir` : `Listo · traducido al ${L[tgt].name.toLowerCase()}`;
     del.eta.textContent = mins >= 1 ? `${mins} min` : '';
     del.download.hidden = false;
     del.share.hidden = !(navigator.canShare && navigator.canShare({ files: [docState.result] }));

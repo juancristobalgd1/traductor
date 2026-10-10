@@ -155,3 +155,8 @@ html,body{overflow-x:hidden}
 .doc-actions .primary{background:var(--accent);color:#fff}
 .doc-actions .secondary{background:var(--soft);color:var(--text)}
 .doc-actions button{white-space:nowrap}
+
+.fmt-chips{display:flex;flex-wrap:wrap;justify-content:center;gap:6px;margin-top:10px}
+.fmt-chips span{font-size:12px;font-weight:600;color:var(--fc);background:color-mix(in srgb,var(--fc) 10%,var(--card));padding:4px 10px;border-radius:999px}
+.doc-file{--fc:#2b579a;position:relative;background:color-mix(in srgb,var(--fc) 12%,var(--card));color:var(--fc)}
+.doc-file::after{content:attr(data-ext);position:absolute;bottom:-4px;right:-6px;font-size:9px;font-weight:700;letter-spacing:.3px;color:#fff;background:var(--fc);padding:1px 4px;border-radius:5px}
