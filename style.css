@@ -48,9 +48,11 @@ body{padding-top:calc(56px + env(safe-area-inset-top))}
 .logo{display:grid;place-items:center;color:var(--text)}
 .logo svg{width:28px;height:28px}
 .brand .name{font-weight:650;font-size:17px;letter-spacing:-.015em}
-.top-actions{display:flex;align-items:center;gap:2px}
+.install-btn svg{width:16px;height:16px}
+@media (max-width:640px){.install-btn{width:34px;padding:0;justify-content:center}}
+.top-actions{display:flex;align-items:center;gap:2px;margin-left:auto}
 .chip{font-size:11px;font-weight:600;letter-spacing:.02em;color:var(--muted);background:var(--surface);border-radius:999px;padding:3px 9px;margin-right:6px;white-space:nowrap}
-.install-btn{height:32px;padding:0 14px;margin-right:4px;border-radius:999px;border:1px solid var(--border-strong);font-weight:600;font-size:13px;transition:background var(--fast),transform var(--fast)}
+.install-btn{display:inline-flex;align-items:center;gap:6px;height:32px;padding:0 12px;margin-right:4px;border-radius:999px;border:1px solid var(--border-strong);font-weight:600;font-size:13px;transition:background var(--fast),transform var(--fast)}
 .install-btn:hover{background:var(--surface)}
 .install-btn:active{transform:scale(.96)}
 @media (display-mode:standalone){.install-btn{display:none!important}}
@@ -77,17 +79,23 @@ body{padding-top:calc(56px + env(safe-area-inset-top))}
 .wrap{max-width:1080px;margin:0 auto;padding:16px max(16px,env(safe-area-inset-left)) calc(40px + env(safe-area-inset-bottom))}
 @media (min-width:860px){.wrap{padding-top:28px}}
 
-/* ---------- Pestañas (control segmentado) ---------- */
-.modes{--i:0;position:relative;display:grid;grid-template-columns:repeat(3,1fr);padding:3px;margin:0 0 12px;background:var(--surface);border-radius:var(--r-md)}
-@media (min-width:860px){.modes{max-width:420px;margin:0 auto 18px}}
-.modes::before{content:"";position:absolute;top:3px;bottom:3px;left:3px;width:calc((100% - 6px)/3);border-radius:calc(var(--r-md) - 3px);background:var(--card);
-  box-shadow:0 1px 2px rgba(0,0,0,.06),0 1px 6px rgba(0,0,0,.04);transform:translateX(calc(var(--i) * 100%));transition:transform var(--mid) var(--ease)}
-@media (prefers-color-scheme:dark){.modes::before{background:var(--surface-2)}}
-.modes button{position:relative;z-index:1;display:inline-flex;align-items:center;justify-content:center;gap:7px;height:36px;border-radius:calc(var(--r-md) - 3px);font-size:14px;font-weight:600;color:var(--muted);transition:color var(--mid)}
-.modes button svg{width:17px;height:17px}
-.modes button.sel{color:var(--text)}
-.modes button:active{opacity:.7}
-@media (max-width:400px){.modes button svg{display:none}}
+/* ---------- Pestañas en la cabecera (como DeepL) ---------- */
+.brand{margin-right:10px}
+.modes{display:flex;align-items:center;gap:2px;flex:1;min-width:0}
+.modes button,.top-btn{display:inline-flex;align-items:center;gap:7px;height:36px;padding:0 12px;border-radius:var(--r-sm);font-size:14px;font-weight:600;color:var(--muted);white-space:nowrap;
+  transition:background .2s,color .2s,transform .38s var(--spring)}
+.modes button svg,.top-btn svg{width:18px;height:18px}
+@media (hover:hover){.modes button:hover,.top-btn:hover{color:var(--text);background:var(--surface)}}
+.modes button:active,.top-btn:active{transform:scale(.94);transition-duration:.2s,.2s,.08s}
+.modes button.sel{color:var(--text);background:var(--surface)}
+@media (prefers-color-scheme:dark){.modes button.sel{background:var(--surface-2)}}
+.lbl{display:inline-block;overflow:hidden;max-width:120px;transition:max-width .32s var(--ease),opacity .22s,margin .32s var(--ease)}
+@media (max-width:640px){
+  .brand{margin-right:4px}
+  .brand .name,.chip{display:none}
+  .modes button,.top-btn{padding:0 10px}
+  .modes button:not(.sel) .lbl,.top-btn .lbl,.install-btn .lbl{max-width:0;opacity:0;margin-left:-7px}
+}
 
 /* ---------- Idiomas ---------- */
 .langbar{display:grid;grid-template-columns:1fr 44px 1fr;align-items:center;gap:4px;margin:0 0 10px}
@@ -298,7 +306,7 @@ textarea::placeholder{color:var(--faint)}
 .icon-btn,.lang-pill,.primary,.secondary,.doc-actions button,.stop,.install-btn,.danger,.swap{transition-property:background,color,opacity,transform,box-shadow;transition-duration:var(--fast),var(--fast),var(--fast),.38s,var(--fast);transition-timing-function:ease,ease,ease,var(--spring),ease}
 .icon-btn:active,.lang-pill:active,.primary:active,.secondary:active,.doc-actions button:active,.stop:active,.danger:active{transition-duration:var(--fast),var(--fast),var(--fast),.08s,var(--fast)}
 /* Herramientas de la traducción: atenuadas hasta que hay algo que copiar o escuchar. */
-.pane.out .tools .icon-btn:disabled{opacity:.28}
+.tools .icon-btn:disabled{opacity:.28}
 /* Altavoz activo mientras habla. */
 .icon-btn.speaking{color:var(--accent)}
 .icon-btn.speaking svg{animation:speak 1s ease-in-out infinite}

@@ -544,6 +544,7 @@ function onInput(immediate) {
   els.count.textContent = `${v.length.toLocaleString('es-ES')} / 5000`;
   els.count.classList.toggle('near', v.length >= 4800);
   els.count.classList.toggle('zero', !v.length);
+  document.getElementById('copySrcBtn').disabled = !v.trim();
   els.clear.hidden = !v;
   state.detected = detect(v);
   // Como Google: si el idioma detectado coincide con el de destino, cambia el destino.
@@ -557,6 +558,11 @@ function onInput(immediate) {
 }
 els.src.addEventListener('input', () => onInput(false));
 els.src.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); scheduleTranslate(0); } });
+const copySrc = document.getElementById('copySrcBtn');
+copySrc.addEventListener('click', async () => {
+  if (!els.src.value) return;
+  try { await navigator.clipboard.writeText(els.src.value); flashDone(copySrc); } catch { toast('No se pudo copiar'); }
+});
 els.clear.addEventListener('click', () => {
   els.src.classList.remove('wipe'); void els.src.offsetWidth; els.src.classList.add('wipe');
   els.src.value = ''; onInput(); els.src.focus(); haptic();

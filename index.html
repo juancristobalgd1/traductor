@@ -15,7 +15,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Traductor">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="style.css?v=10">
+<link rel="stylesheet" href="style.css?v=11">
 <script>
   // Activa el aislamiento entre orígenes (necesario para usar varios hilos) mediante el service worker.
   if ('serviceWorker' in navigator) {
@@ -37,12 +37,15 @@
     </span>
     <span class="name">Traductor</span>
   </div>
+  <nav class="modes" id="modes" role="tablist" aria-label="Qué traducir">
+    <button role="tab" data-mode="text" class="sel" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg><span class="lbl">Texto</span></button>
+    <button role="tab" data-mode="doc" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span class="lbl">Documentos</span></button>
+    <button role="tab" data-mode="cam" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 15.5l-4.5-4.5-8.5 8.5"/></svg><span class="lbl">Imágenes</span></button>
+  </nav>
   <div class="top-actions">
-    <button class="install-btn" id="installBtn" hidden>Instalar app</button>
+    <button class="install-btn" id="installBtn" aria-label="Instalar app" hidden><svg viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg><span class="lbl">Instalar</span></button>
     <span class="chip" id="backendChip" hidden></span>
-    <button class="icon-btn" id="historyBtn" title="Historial" aria-label="Historial">
-      <svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4M12 7v5l3 2"/></svg>
-    </button>
+    <button class="top-btn" id="historyBtn" aria-label="Historial"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4M12 7v5l3 2"/></svg><span class="lbl">Historial</span></button>
     <button class="icon-btn" id="infoBtn" title="Información" aria-label="Información">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
     </button>
@@ -50,11 +53,6 @@
 </header>
 
 <main class="wrap">
-  <div class="modes" id="modes" role="tablist">
-    <button role="tab" data-mode="text" class="sel"><svg viewBox="0 0 24 24"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>Texto</button>
-    <button role="tab" data-mode="doc"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>Documentos</button>
-    <button role="tab" data-mode="cam"><svg viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.5"/></svg>Cámara</button>
-  </div>
   <div class="langbar">
     <button class="lang-pill" id="srcLangBtn" aria-haspopup="dialog" aria-expanded="false"><span id="srcLangLabel">Detectar idioma</span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
     <button class="swap" id="swapBtn" title="Intercambiar idiomas" aria-label="Intercambiar idiomas">
@@ -73,6 +71,7 @@
         <div class="tools">
           <button class="icon-btn" id="micBtn" data-tip="Dictar" aria-label="Dictar"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
           <button class="icon-btn" id="speakSrcBtn" data-tip="Escuchar" aria-label="Escuchar"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
+          <button class="icon-btn" id="copySrcBtn" data-tip="Copiar" aria-label="Copiar texto" disabled><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="ok-icon" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
         </div>
         <span class="count zero" id="count">0 / 5000</span>
       </div>
@@ -218,6 +217,6 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<script type="module" src="app.js?v=10"></script>
+<script type="module" src="app.js?v=11"></script>
 </body>
 </html>
