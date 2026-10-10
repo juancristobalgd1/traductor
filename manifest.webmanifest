@@ -80,6 +80,17 @@
           "sizes": "192x192"
         }
       ]
+    },
+    {
+      "name": "Traducir con la cámara",
+      "short_name": "Cámara",
+      "url": "./?mode=cam",
+      "icons": [
+        {
+          "src": "icons/icon-192.png",
+          "sizes": "192x192"
+        }
+      ]
     }
   ]
 }

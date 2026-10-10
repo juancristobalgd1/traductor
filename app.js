@@ -643,8 +643,11 @@ function setMode(mode) {
   store.set('mode', mode);
   del.modes.querySelectorAll('[data-mode]').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('sel', on); b.setAttribute('aria-selected', on); });
   del.panes.hidden = mode !== 'text';
+  document.getElementById('camPane').hidden = mode !== 'cam';
   del.pane.hidden = mode !== 'doc';
-  if (mode === 'text') onInput(); else if (docState.parsed) { state.detected = docState.parsed.lang; renderLangs(); }
+  if (mode === 'text') onInput();
+  else if (mode === 'doc' && docState.parsed) { state.detected = docState.parsed.lang; renderLangs(); }
+  else if (mode === 'cam' && window.camState?.lang) { state.detected = camState.lang; renderLangs(); }
 }
 del.modes.addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
 
@@ -1298,4 +1301,288 @@ del.remove.addEventListener('click', () => {
   docState.ctrl?.abort(); docState.file = docState.parsed = docState.result = null;
   del.card.hidden = true; del.drop.hidden = false; resetDocUI();
 });
-setMode(store.get('mode', 'text'));
+
+// =====================================================================
+// ---------- Cámara: foto → lectura del texto (Tesseract) → traducción encima ----------
+// =====================================================================
+const TESS = { es: 'spa', en: 'eng', fr: 'fra', pt: 'por', it: 'ita', de: 'deu', nl: 'nld', pl: 'pol', cs: 'ces', uk: 'ukr', ru: 'rus',
+  tr: 'tur', ar: 'ara', he: 'heb', fa: 'fas', ur: 'urd', hi: 'hin', mr: 'mar', gu: 'guj', bn: 'ben', ta: 'tam', te: 'tel', zh: 'chi_sim',
+  'zh-Hant': 'chi_tra', yue: 'chi_tra', ja: 'jpn', ko: 'kor', th: 'tha', vi: 'vie', id: 'ind', ms: 'msa', tl: 'tgl', km: 'khm', my: 'mya',
+  bo: 'bod', kk: 'kaz', mn: 'mon', ug: 'uig' };
+const LATIN = new Set(['es', 'en', 'fr', 'pt', 'it', 'de', 'nl', 'pl', 'cs', 'tr', 'vi', 'id', 'ms', 'tl']);
+const RTL = new Set(['ar', 'he', 'fa', 'ur', 'ug']);
+const CJK_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/;
+const cel = {
+  pane: D('camPane'), start: D('camStart'), card: D('camCard'), canvas: D('camCanvas'), view: D('camView'),
+  shoot: D('camShoot'), pick: D('camPick'), camInput: D('camInput'), imgInput: D('imgInput'),
+  progress: D('camProgress'), bar: D('camBar'), status: D('camStatus'), eta: D('camEta'), texts: D('camTexts'),
+  stop: D('camStop'), download: D('camDownload'), share: D('camShare'), copy: D('camCopy'), redo: D('camRedo'), again: D('camNew'),
+};
+const camState = window.camState = { src: null, blocks: [], view: 'tr', ctrl: null, name: 'foto', lang: null, ocrSrc: null, tgt: null, result: null };
+let tess = null, tessLangs = '';
+
+async function getOcr(langs) {
+  if (!window.Tesseract) await loadScript('vendor/tesseract/tesseract.min.js');
+  if (tess && tessLangs === langs) return tess;
+  if (tess) { try { await tess.terminate(); } catch {} tess = null; }
+  const abs = p => new URL(p, location.href).href;
+  tess = await Tesseract.createWorker(langs.split('+'), 1, {
+    workerPath: abs('vendor/tesseract/worker.min.js'), corePath: abs('vendor/tesseract/'), workerBlobURL: false,
+    logger: m => {
+      if (m.status === 'loading language traineddata') { cel.status.textContent = 'Descargando el lector de texto…'; setCamBar(m.progress * 30); }
+      else if (m.status === 'recognizing text') { cel.status.textContent = 'Leyendo el texto…'; setCamBar(30 + m.progress * 70); }
+    },
+  });
+  tessLangs = langs;
+  return tess;
+}
+const setCamBar = pct => { cel.bar.style.width = Math.max(0, Math.min(100, pct)).toFixed(1) + '%'; };
+
+async function loadImage(file) {
+  const bmp = await createImageBitmap(file, { imageOrientation: 'from-image' });
+  const k = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
+  const c = document.createElement('canvas');
+  c.width = Math.round(bmp.width * k); c.height = Math.round(bmp.height * k);
+  c.getContext('2d').drawImage(bmp, 0, 0, c.width, c.height);
+  bmp.close?.();
+  return c;
+}
+
+function sampleColors(img, bb) {
+  const W = img.width, H = img.height, d = img.data;
+  const px = (x, y) => { const i = (y * W + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
+  const X0 = Math.max(0, bb.x0), X1 = Math.min(W - 1, bb.x1), Y0 = Math.max(0, bb.y0), Y1 = Math.min(H - 1, bb.y1);
+  const ring = [], step = Math.max(1, Math.round((X1 - X0 + Y1 - Y0) / 200));
+  for (let x = X0; x <= X1; x += step) for (const y of [Y0 - 3, Y1 + 3]) if (y >= 0 && y < H) ring.push(px(x, y));
+  for (let y = Y0; y <= Y1; y += step) for (const x of [X0 - 3, X1 + 3]) if (x >= 0 && x < W) ring.push(px(x, y));
+  const med = k => { const v = ring.map(p => p[k]).sort((a, b) => a - b); return v.length ? v[v.length >> 1] : 255; };
+  const bg = [med(0), med(1), med(2)];
+  let maxD = 0; const ink = [];
+  const st = Math.max(1, Math.round(Math.sqrt((X1 - X0) * (Y1 - Y0) / 20000)));
+  for (let y = Y0; y <= Y1; y += st) for (let x = X0; x <= X1; x += st) {
+    const p = px(x, y), dd = Math.abs(p[0] - bg[0]) + Math.abs(p[1] - bg[1]) + Math.abs(p[2] - bg[2]);
+    if (dd > maxD) maxD = dd; if (dd > 60) ink.push([p, dd]);
+  }
+  const strong = ink.filter(([, dd]) => dd > maxD * 0.7);
+  const lum = c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
+  let color = strong.length ? [0, 1, 2].map(k => Math.round(strong.reduce((a, [p]) => a + p[k], 0) / strong.length)) : null;
+  if (!color || Math.abs(lum(color) - lum(bg)) < 60) color = lum(bg) > 128 ? [17, 17, 17] : [255, 255, 255];
+  return { bg, color };
+}
+
+function ocrBlocks(data, img) {
+  const out = [];
+  // Tesseract a veces junta un cartel y el texto de debajo: separo por tamaño de letra y por huecos.
+  const groups = [];
+  for (const b of data.blocks || []) for (const p of b.paragraphs || []) {
+    let g = [];
+    for (const l of (p.lines || []).filter(l => l.text.trim() && l.confidence > 30)) {
+      const prev = g[g.length - 1];
+      if (prev) {
+        const ph = prev.bbox.y1 - prev.bbox.y0, lh = l.bbox.y1 - l.bbox.y0;
+        if (Math.abs(lh - ph) > Math.max(ph, lh) * 0.3 || l.bbox.y0 - prev.bbox.y1 > Math.min(ph, lh) * 0.9) { groups.push(g); g = []; }
+      }
+      g.push(l);
+    }
+    if (g.length) groups.push(g);
+  }
+  for (const lines of groups) {
+    let text = lines.map(l => l.text.trim()).reduce((acc, t) => !acc ? t : /\p{L}-$/u.test(acc) && /^\p{Ll}/u.test(t) ? acc.slice(0, -1) + t : acc + ' ' + t, '');
+    text = text.replace(/\s+/g, ' ').replace(/([\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af])\s+(?=[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af])/g, '$1').trim();
+    const conf = lines.reduce((a, l) => a + l.confidence, 0) / lines.length;
+    if (conf < 45 || !/\p{L}{2}/u.test(text)) continue;
+    const bb = { x0: Math.min(...lines.map(l => l.bbox.x0)), y0: Math.min(...lines.map(l => l.bbox.y0)), x1: Math.max(...lines.map(l => l.bbox.x1)), y1: Math.max(...lines.map(l => l.bbox.y1)) };
+    const lineH = lines.reduce((a, l) => a + (l.bbox.y1 - l.bbox.y0), 0) / lines.length;
+    const step = lines.length > 1 ? (lines[lines.length - 1].bbox.y0 - lines[0].bbox.y0) / (lines.length - 1) : lineH * 1.25;
+    out.push({ text, bb, lineH, step, n: lines.length, tr: null, ...sampleColors(img, bb) });
+  }
+  return out;
+}
+
+function wrapCanvas(ctx, text, maxW, cjk) {
+  const tokens = cjk ? text.match(/[\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]|[^\s\u3000-\u9fff\uac00-\ud7af\uff00-\uffef]+|\s+/g) || [] : text.split(/(\s+)/);
+  const lines = []; let cur = '';
+  for (const tok of tokens) {
+    if (!tok) continue;
+    if (/^\s+$/.test(tok)) { if (cur) cur += ' '; continue; }
+    if (!cur.trim() || ctx.measureText(cur + tok).width <= maxW) cur += tok;
+    else { lines.push(cur.trimEnd()); cur = tok; }
+  }
+  if (cur.trim()) lines.push(cur.trimEnd());
+  return lines;
+}
+
+function renderCam() {
+  const src = camState.src; if (!src) return;
+  const c = cel.canvas, ctx = c.getContext('2d');
+  c.width = src.width; c.height = src.height;
+  ctx.drawImage(src, 0, 0);
+  if (camState.view !== 'tr') return;
+  const tgt = camState.tgt, cjk = !!PDF_CJK[tgt], rtl = RTL.has(tgt);
+  const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
+  for (const b of camState.blocks) {
+    if (!b.tr) continue;
+    const pad = Math.max(2, b.lineH * 0.15);
+    const w = b.bb.x1 - b.bb.x0, h = b.bb.y1 - b.bb.y0;
+    ctx.fillStyle = rgb(b.bg);
+    ctx.beginPath(); ctx.roundRect?.(b.bb.x0 - pad, b.bb.y0 - pad, w + pad * 2, h + pad * 2, pad); ctx.roundRect ? ctx.fill() : ctx.fillRect(b.bb.x0 - pad, b.bb.y0 - pad, w + pad * 2, h + pad * 2);
+    let size = b.lineH * 0.95, lines, lh;
+    for (;;) {
+      ctx.font = `600 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif`;
+      lh = Math.max(size * 1.15, b.step * size / (b.lineH * 0.95));
+      lines = wrapCanvas(ctx, b.tr, w, cjk);
+      if ((lines.length - 1) * lh + size <= h * 1.1 + 2 || size < 9) break;
+      size *= 0.92;
+    }
+    ctx.fillStyle = rgb(b.color); ctx.textBaseline = 'top';
+    ctx.direction = rtl ? 'rtl' : 'ltr'; ctx.textAlign = rtl ? 'right' : 'left';
+    const top = b.bb.y0 + Math.max(0, (h - ((lines.length - 1) * lh + size)) / 2);
+    lines.forEach((ln, i) => ctx.fillText(ln, rtl ? b.bb.x1 : b.bb.x0, top + i * lh, w + pad));
+  }
+}
+
+function renderCamTexts() {
+  cel.texts.innerHTML = '';
+  for (const b of camState.blocks) {
+    const d = document.createElement('div');
+    const sm = document.createElement('small'); sm.textContent = b.text;
+    const tr = document.createElement('span'); tr.textContent = b.tr ?? '…'; if (!b.tr) tr.className = 'cur';
+    if (RTL.has(camState.tgt)) tr.dir = 'rtl';
+    d.append(sm, tr); b.el = tr; cel.texts.appendChild(d);
+  }
+  cel.texts.hidden = !camState.blocks.length;
+}
+
+function camButtons(done) {
+  cel.stop.hidden = done; cel.download.hidden = !done || !camState.blocks.some(b => b.tr);
+  cel.copy.hidden = cel.download.hidden; cel.redo.hidden = !done || !camState.blocks.length;
+  cel.share.hidden = cel.download.hidden || !navigator.canShare;
+  cel.view.hidden = cel.download.hidden;
+}
+
+async function camImage(file) {
+  if (!file || !/^image\//.test(file.type || 'image/')) { toast('Eso no parece una imagen'); return; }
+  if (docBusy) { toast('Espera a que termine lo que se está traduciendo'); return; }
+  setMode('cam');
+  cel.start.hidden = true; cel.card.hidden = false;
+  camState.name = (file.name || 'foto').replace(/\.[^.]+$/, '') || 'foto';
+  camState.blocks = []; camState.view = 'tr'; camState.result = null; renderCamTexts();
+  cel.view.querySelectorAll('button').forEach(x => x.classList.toggle('sel', x.dataset.v === 'tr'));
+  cel.progress.hidden = false; setCamBar(0); cel.eta.textContent = ''; cel.status.textContent = 'Abriendo la foto…';
+  try { camState.src = await loadImage(file); }
+  catch { cel.status.textContent = 'No pude abrir esta imagen'; camButtons(true); return; }
+  renderCam();
+  await camRun(true);
+}
+
+async function camOcr() {
+  const src = camState.src;
+  const img = src.getContext('2d').getImageData(0, 0, src.width, src.height);
+  const chosen = state.src !== 'auto' ? state.src : null;
+  let langs = chosen ? [...new Set([TESS[chosen], 'eng'])].join('+') : 'eng+spa';
+  let w = await getOcr(langs);
+  let { data } = await w.recognize(src, {}, { blocks: true, text: true });
+  let blocks = ocrBlocks(data, img);
+  let lang = chosen || detect(blocks.map(b => b.text).join('\n'));
+  if (!chosen && lang && LATIN.has(lang) && !['en', 'es'].includes(lang) && TESS[lang]) {
+    langs = `${TESS[lang]}+eng`; w = await getOcr(langs);
+    ({ data } = await w.recognize(src, {}, { blocks: true, text: true }));
+    blocks = ocrBlocks(data, img);
+  }
+  camState.ocrSrc = state.src; camState.lang = lang;
+  return blocks;
+}
+
+async function camRun(ocr) {
+  const ctrl = new AbortController(); camState.ctrl = ctrl;
+  docBusy = true; camButtons(false);
+  let lock = null; try { lock = await navigator.wakeLock?.request('screen'); } catch {}
+  try {
+    if (ocr || !camState.blocks.length || (state.src !== 'auto' && state.src !== camState.ocrSrc)) {
+      camState.blocks = await camOcr();
+      if (ctrl.signal.aborted) throw new DOMException('aborted', 'AbortError');
+      state.detected = camState.lang; renderLangs();
+      if (!camState.blocks.length) {
+        cel.status.textContent = state.src === 'auto' ? 'No encontré texto. Si está en otro alfabeto, elige su idioma arriba.' : 'No encontré texto en la foto';
+        setCamBar(0); return;
+      }
+    }
+    if (!state.ready) {
+      renderCamTexts(); cel.status.textContent = 'Texto leído. Descarga el traductor para traducirlo.'; setCamBar(100);
+      toast('Primero descarga el traductor'); return;
+    }
+    let tgt = state.tgt;
+    if (state.src === 'auto' && camState.lang === tgt) { tgt = state.recent.find(c => c !== tgt && L[c]) || (tgt === 'es' ? 'en' : 'es'); state.tgt = tgt; store.set('tgt', tgt); renderLangs(); }
+    const src = state.src === 'auto' ? camState.lang : state.src;
+    camState.tgt = tgt;
+    camState.blocks.forEach(b => { b.tr = null; });
+    renderCamTexts(); renderCam();
+    const total = camState.blocks.reduce((a, b) => a + b.text.length, 0); let done = 0; const t0 = performance.now();
+    for (let i = 0; i < camState.blocks.length; i++) {
+      const b = camState.blocks[i];
+      cel.status.textContent = `Traduciendo ${i + 1} de ${camState.blocks.length}`;
+      setCamBar(done / total * 100);
+      try {
+        b.tr = await translatePlain(b.text, tgt, src, ctrl.signal, a => { b.el.textContent = a; });
+      } catch (e) {
+        if (e instanceof Degenerate) {
+          if (currentGpu) { store.set('gpuBroken', true); toast('Tu GPU no traduce bien. Cambio al procesador, vuelve a pulsar Repetir.'); state.ready = false; loadModel(); throw new DOMException('aborted', 'AbortError'); }
+          b.tr = null;
+        } else throw e;
+      }
+      if (b.el) { b.el.textContent = b.tr ?? b.text; b.el.className = ''; }
+      done += b.text.length; renderCam();
+      const secs = (performance.now() - t0) / 1000;
+      if (secs > 6 && done < total) { const left = Math.round(secs * (total - done) / done); cel.eta.textContent = left > 3 ? `faltan ~${left} s` : ''; }
+    }
+    setCamBar(100); cel.eta.textContent = '';
+    cel.status.textContent = `Listo · ${camState.blocks.length} texto${camState.blocks.length > 1 ? 's' : ''} traducido${camState.blocks.length > 1 ? 's' : ''} al ${L[tgt].name.toLowerCase()}`;
+  } catch (e) {
+    if (e?.name === 'AbortError') cel.status.textContent = 'Detenido';
+    else { console.error(e); cel.status.textContent = 'Algo falló al leer la foto'; toast(navigator.onLine ? 'Algo falló al leer la foto' : 'La primera vez necesito internet para descargar el lector de texto'); }
+    cel.eta.textContent = '';
+  } finally {
+    docBusy = false; camState.ctrl = null; camButtons(true);
+    try { await lock?.release(); } catch {}
+  }
+}
+
+function camBlob() {
+  return new Promise(ok => cel.canvas.toBlob(ok, 'image/jpeg', 0.92)).then(b => new File([b], `${camState.name} (${L[camState.tgt]?.name || 'traducción'}).jpg`, { type: 'image/jpeg' }));
+}
+cel.shoot.addEventListener('click', () => cel.camInput.click());
+cel.pick.addEventListener('click', () => cel.imgInput.click());
+cel.again.addEventListener('click', () => { camState.ctrl?.abort(); cel.camInput.click(); });
+[cel.camInput, cel.imgInput].forEach(inp => inp.addEventListener('change', () => { camImage(inp.files[0]); inp.value = ''; }));
+cel.stop.addEventListener('click', () => camState.ctrl?.abort());
+cel.redo.addEventListener('click', () => camRun(false));
+cel.view.addEventListener('click', e => {
+  const b = e.target.closest('button[data-v]'); if (!b) return;
+  camState.view = b.dataset.v; cel.view.querySelectorAll('button').forEach(x => x.classList.toggle('sel', x === b)); renderCam();
+});
+cel.download.addEventListener('click', async () => {
+  const v = camState.view; if (v !== 'tr') { camState.view = 'tr'; renderCam(); }
+  const f = await camBlob(); if (v !== 'tr') { camState.view = v; renderCam(); }
+  const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+});
+cel.share.addEventListener('click', async () => {
+  const f = await camBlob();
+  if (navigator.canShare?.({ files: [f] })) navigator.share({ files: [f], title: f.name }).catch(() => {});
+  else toast('Tu navegador no deja compartir imágenes');
+});
+cel.copy.addEventListener('click', async () => {
+  const t = camState.blocks.map(b => b.tr || b.text).join('\n\n');
+  try { await navigator.clipboard.writeText(t); toast('Texto copiado'); } catch { toast('No pude copiar'); }
+});
+cel.start.addEventListener('dragover', e => { e.preventDefault(); cel.start.classList.add('over'); });
+cel.start.addEventListener('dragleave', () => cel.start.classList.remove('over'));
+cel.start.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); cel.start.classList.remove('over'); camImage(e.dataTransfer.files[0]); });
+addEventListener('paste', e => {
+  const f = [...(e.clipboardData?.files || [])].find(x => /^image\//.test(x.type));
+  if (f && (store.get('mode', 'text') === 'cam' || document.activeElement === document.body)) { e.preventDefault(); camImage(f); }
+});
+{
+  const qm = new URLSearchParams(location.search).get('mode');
+  setMode(qm === 'cam' || qm === 'doc' ? qm : store.get('mode', 'text'));
+}

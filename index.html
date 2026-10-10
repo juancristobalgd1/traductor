@@ -52,6 +52,7 @@
   <div class="modes" id="modes" role="tablist">
     <button role="tab" data-mode="text" class="sel"><svg viewBox="0 0 24 24"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>Texto</button>
     <button role="tab" data-mode="doc"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>Documentos</button>
+    <button role="tab" data-mode="cam"><svg viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.5"/></svg>Cámara</button>
   </div>
   <div class="langbar">
     <button class="lang-pill" id="srcLangBtn" aria-haspopup="dialog"><span id="srcLangLabel">Detectar idioma</span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
@@ -133,6 +134,36 @@
         <button class="secondary" id="docStop" hidden>Detener</button>
         <button class="primary" id="docDownload" hidden>Descargar</button>
         <button class="secondary" id="docShare" hidden>Compartir</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="cam" id="camPane" hidden>
+    <input type="file" id="camInput" accept="image/*" capture="environment" hidden>
+    <input type="file" id="imgInput" accept="image/*" hidden>
+    <div class="drop cam-start" id="camStart">
+      <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.5"/></svg></div>
+      <strong>Traduce lo que ves</strong>
+      <span>Haz una foto a un cartel, una carta o un menú</span>
+      <div class="cam-btns"><button class="primary" id="camShoot">Hacer foto</button><button class="secondary" id="camPick">Subir imagen</button></div>
+      <span class="tiny">La foto no sale de tu dispositivo. La primera vez se descarga el lector de texto de ese idioma (unos MB).</span>
+    </div>
+    <div class="doc-card cam-card" id="camCard" hidden>
+      <div class="cam-stage"><canvas id="camCanvas"></canvas>
+        <div class="cam-view" id="camView" hidden><button data-v="tr" class="sel">Traducción</button><button data-v="orig">Original</button></div>
+      </div>
+      <div class="doc-progress" id="camProgress">
+        <div class="bar"><div id="camBar"></div></div>
+        <div class="doc-status"><span id="camStatus"></span><span id="camEta"></span></div>
+      </div>
+      <div class="cam-texts" id="camTexts" hidden></div>
+      <div class="doc-actions">
+        <button class="secondary" id="camStop" hidden>Detener</button>
+        <button class="primary" id="camDownload" hidden>Guardar imagen</button>
+        <button class="secondary" id="camShare" hidden>Compartir</button>
+        <button class="secondary" id="camCopy" hidden>Copiar texto</button>
+        <button class="secondary" id="camRedo" hidden>Repetir</button>
+        <button class="secondary" id="camNew">Otra foto</button>
       </div>
     </div>
   </section>

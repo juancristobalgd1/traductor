@@ -8,6 +8,10 @@ Traductor web en 33 idiomas (y 5 variantes) que funciona dentro del navegador co
 
 Atajo: Ctrl + Enter para traducir al momento. También acepta `?q=texto&to=en` en la URL.
 
+## Cámara
+
+En la pestaña **Cámara** haces una foto (o subes una imagen) a un cartel, una carta o un menú: la app lee el texto con Tesseract.js, lo traduce y lo pinta encima de la foto con los colores del original. Puedes ver la traducción o el original, guardar la imagen o copiar el texto. La primera vez se descarga el lector del idioma de la foto (unos MB).
+
 ## Documentos
 
 En la pestaña **Documentos** traduces un archivo entero sin que salga de tu dispositivo:
