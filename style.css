@@ -108,3 +108,5 @@ textarea::placeholder{color:var(--muted)}
 .toast{position:fixed;left:50%;bottom:calc(24px + env(safe-area-inset-bottom));transform:translateX(-50%);background:#262626;color:#fff;padding:10px 16px;border-radius:12px;font-size:14px;z-index:30;box-shadow:0 8px 24px rgba(0,0,0,.2)}
 .lang-pill.auto::after{content:"auto";font-size:11px;font-weight:600;color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent);border-radius:999px;padding:1px 7px;margin-left:2px;order:1}
 .lang-pill.auto svg{order:2}
+.pane.out{min-height:370px}
+@media (max-width:480px){.lang-pill{padding:0 10px;gap:4px}.lang-pill.auto svg{display:none}}
