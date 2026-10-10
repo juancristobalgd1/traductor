@@ -344,3 +344,9 @@ textarea::placeholder{color:var(--faint)}
 textarea.wipe{animation:wipe .18s ease}
 @keyframes wipe{from{opacity:.2}}
 @media (prefers-reduced-motion:reduce){.skel,.bar>div::after{animation:none}}
+
+/* Modelo abriéndose de fondo: línea fina en la traducción, sin tapar nada */
+html,body{overscroll-behavior-y:contain} /* evita recargar sin querer al tirar hacia abajo en el móvil */
+body.opening .pane.out::before{content:"";position:absolute;top:0;left:0;height:2px;width:32%;background:var(--accent);border-radius:2px;z-index:3;animation:opening 1.2s var(--ease) infinite}
+@keyframes opening{0%{transform:translateX(-100%)}100%{transform:translateX(320%)}}
+@media (prefers-reduced-motion:reduce){body.opening .pane.out::before{animation:none;width:100%;opacity:.4}}

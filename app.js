@@ -364,7 +364,11 @@ async function renderStorage() {
 async function loadModel() {
   const saved = await cachedModel();
   const fromCache = !!saved;
-  showLoading(fromCache ? 'Abriendo el traductor…' : 'Descargando modelo…', fromCache ? 'Ya está guardado en tu dispositivo' : '', fromCache ? 100 : 0);
+  state.loading = true;
+  // Ya guardado: la app se puede usar al momento; el modelo se abre de fondo.
+  const show = (text, sub, pct) => fromCache ? (setStatus(text), document.body.classList.add('opening')) : showLoading(text, sub, pct);
+  if (fromCache) { hideOverlays(); show('Abriendo el traductor…'); }
+  else showLoading('Descargando modelo…', '', 0);
   const make = () => new Wllama(WASM, { parallelDownloads: 3, allowOffline: true, suppressNativeLog: true });
   let started = performance.now();
   const progressCallback = ({ loaded, total }) => {
@@ -373,8 +377,8 @@ async function loadModel() {
     const secs = (performance.now() - started) / 1000;
     const speed = loaded / Math.max(secs, 0.5);
     const eta = speed > 0 ? Math.round((total - loaded) / speed) : 0;
-    if (fromCache || loaded >= total) showLoading(fromCache ? 'Abriendo el traductor…' : 'Preparando el traductor…', fromCache ? 'Ya está guardado en tu dispositivo' : 'Guardándolo y cargándolo en memoria', 100);
-    else showLoading('Descargando modelo…', `${gb(loaded)} de ${gb(total)} GB${eta > 2 ? ` · faltan ~${eta > 90 ? Math.round(eta / 60) + ' min' : eta + ' s'}` : ''}`, pct);
+    if (fromCache || loaded >= total) show(fromCache ? 'Abriendo el traductor…' : 'Preparando el traductor…', fromCache ? 'Ya está guardado en tu dispositivo' : 'Guardándolo y cargándolo en memoria', 100);
+    else show('Descargando modelo…', `${gb(loaded)} de ${gb(total)} GB${eta > 2 ? ` · faltan ~${eta > 90 ? Math.round(eta / 60) + ' min' : eta + ' s'}` : ''}`, pct);
   };
   const base = { n_ctx: 4096, n_batch: 512, progressCallback, useCache: true };
   const pref = store.get('engine', 'auto');          // auto | cpu | gpu
@@ -398,13 +402,13 @@ async function loadModel() {
     if (gpu && !(make().isSupportWebGPU?.() ?? false)) gpu = false;
     await loadWith(gpu);
     if (gpu && !store.get('gpuOk', false)) {
-      showLoading('Comprobando el traductor…', 'Solo la primera vez', 100);
+      show('Comprobando el traductor…', 'Solo la primera vez', 100);
       if (await selfTest()) store.set('gpuOk', true);
       else {
         console.warn('La GPU da resultados incorrectos, cambio a CPU');
         store.set('gpuBroken', true); store.set('gpuOk', false);
         try { await wllama.exit(); } catch {}
-        showLoading('Preparando el traductor…', 'Tu GPU no traduce bien, uso el procesador', 100);
+        show('Preparando el traductor…', 'Tu GPU no traduce bien, uso el procesador', 100);
         gpu = false;
         await loadWith(false);
       }
@@ -415,7 +419,7 @@ async function loadModel() {
     try { gpu = false; await loadWith(false); }
     catch (err2) {
       console.error(err2);
-      wllama = null;
+      wllama = null; state.loading = false; document.body.classList.remove('opening');
       showCard();
       els.loadBtn.textContent = 'Reintentar';
       toast(navigator.onLine ? 'No se pudo cargar el modelo. Inténtalo de nuevo.' : 'Sin conexión: necesitas internet para la primera descarga.');
@@ -431,7 +435,7 @@ async function loadModel() {
   els.chip.textContent = gpu ? 'GPU' : 'CPU'; els.chip.hidden = false;
   els.infoBackend.textContent = gpu ? 'GPU (WebGPU)' : `Procesador · ${threads} ${threads === 1 ? 'hilo' : 'hilos'}`;
   renderEngine();
-  hideOverlays();
+  hideOverlays(); state.loading = false; document.body.classList.remove('opening');
   setStatus('Listo');
   if (els.src.value.trim()) scheduleTranslate(0);
 }
@@ -492,10 +496,34 @@ function segment(text) {
   return out;
 }
 
+// Mientras el modelo se abre: si el navegador trae su propio traductor (Chrome), lo uso para que la respuesta sea instantánea.
+const quickTr = new Map();
+async function quickTranslate(text) {
+  if (!('Translator' in self) || !text.trim()) return false;
+  const src = state.src === 'auto' ? state.detected : state.src;
+  if (!src || src === state.tgt) return false;
+  try {
+    const opt = { sourceLanguage: src, targetLanguage: state.tgt };
+    if ((await Translator.availability(opt)) !== 'available') return false;
+    const key = src + '>' + state.tgt;
+    if (!quickTr.has(key)) quickTr.set(key, await Translator.create(opt));
+    const out = await quickTr.get(key).translate(text);
+    if (state.ready || els.src.value !== text) return true;
+    renderOutput(out); setStatus('Traducción rápida · abriendo el modelo…');
+    return true;
+  } catch { return false; }
+}
 async function translateNow() {
   if (docBusy) return;
   const text = els.src.value;
-  if (!state.ready) { if (text.trim() && els.modelCard.hidden && els.loadingBox.hidden) showCard(); return; }
+  if (!state.ready) {
+    if (state.loading) {
+      if (text.trim() && !(await quickTranslate(text))) setStatus('Abriendo el traductor… se traduce enseguida');
+      return; // al terminar de abrir se traduce solo
+    }
+    if (text.trim() && els.modelCard.hidden && els.loadingBox.hidden) showCard();
+    return;
+  }
   // Cancela la traducción anterior y espera a que termine.
   if (job) { job.ctrl.abort(); await job.done.catch(() => {}); }
   if (!text.trim()) { renderOutput(''); setStatus('Listo'); return; }
@@ -1357,6 +1385,7 @@ async function openDoc(file) {
 
 async function translateDoc() {
   if (!docState.file) return;
+  if (!state.ready && state.loading) { toast('El traductor se está abriendo, un segundo…'); return; }
   if (!state.ready) {
     setMode('text'); if (els.loadingBox.hidden) showCard();
     toast('Primero descarga el traductor'); return;
@@ -1658,6 +1687,9 @@ async function camRun(ocr) {
         cel.status.textContent = state.src === 'auto' ? 'No encontré texto. Si está en otro alfabeto, elige su idioma arriba.' : 'No encontré texto en la foto';
         setCamBar(0); return;
       }
+    }
+    if (!state.ready && state.loading) {
+      renderCamTexts(); cel.status.textContent = 'Texto leído. El traductor se está abriendo, vuelve a pulsar en un segundo.'; setCamBar(100); return;
     }
     if (!state.ready) {
       renderCamTexts(); cel.status.textContent = 'Texto leído. Descarga el traductor para traducirlo.'; setCamBar(100);
