@@ -1,8 +1,8 @@
 // Service worker: guarda la app para usarla sin conexión y añade las cabeceras
 // COOP/COEP para que el navegador permita usar varios hilos (más velocidad).
-const VERSION = 'traductor-v4';
+const VERSION = 'traductor-v5';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon.svg', './icons/icon-192.png', './icons/icon-512.png', './icons/maskable-192.png', './icons/maskable-512.png', './icons/apple-touch-icon.png',
-  './vendor/wllama/index.js', './vendor/wllama/wllama.wasm'];
+  './vendor/wllama/index.js', './vendor/jszip/jszip.min.js', './vendor/wllama/wllama.wasm'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(VERSION).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));

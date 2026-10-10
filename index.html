@@ -49,6 +49,10 @@
 </header>
 
 <main class="wrap">
+  <div class="modes" id="modes" role="tablist">
+    <button role="tab" data-mode="text" class="sel"><svg viewBox="0 0 24 24"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg>Texto</button>
+    <button role="tab" data-mode="doc"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg>Documentos</button>
+  </div>
   <div class="langbar">
     <button class="lang-pill" id="srcLangBtn" aria-haspopup="dialog"><span id="srcLangLabel">Detectar idioma</span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
     <button class="swap" id="swapBtn" title="Intercambiar idiomas" aria-label="Intercambiar idiomas">
@@ -99,6 +103,35 @@
         </div>
         <div class="status" id="status"></div>
         <button class="stop" id="stopBtn" hidden>Detener</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="docs" id="docsPane" hidden>
+    <label class="drop" id="drop">
+      <input type="file" id="docInput" accept=".docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document" hidden>
+      <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 18v-6M9 15l3-3 3 3"/></svg></div>
+      <strong>Elige un documento de Word</strong>
+      <span>o arrástralo aquí · .docx</span>
+      <span class="tiny">Se mantienen el formato, las tablas, los encabezados y las imágenes.</span>
+    </label>
+
+    <div class="doc-card" id="docCard" hidden>
+      <div class="doc-head">
+        <div class="doc-file"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></div>
+        <div class="doc-info"><div class="doc-name" id="docName"></div><div class="doc-meta" id="docMeta"></div></div>
+        <button class="icon-btn" id="docRemove" title="Quitar documento" aria-label="Quitar documento"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="doc-progress" id="docProgress" hidden>
+        <div class="bar"><div id="docBar"></div></div>
+        <div class="doc-status"><span id="docStatus"></span><span id="docEta"></span></div>
+      </div>
+      <div class="doc-preview" id="docPreview" hidden></div>
+      <div class="doc-actions">
+        <button class="primary" id="docTranslate">Traducir documento</button>
+        <button class="secondary" id="docStop" hidden>Detener</button>
+        <button class="primary" id="docDownload" hidden>Descargar</button>
+        <button class="secondary" id="docShare" hidden>Compartir</button>
       </div>
     </div>
   </section>

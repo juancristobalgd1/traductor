@@ -145,6 +145,7 @@ const state = {
 };
 let wllama = null;
 let job = null;          // { ctrl, done }
+let docBusy = false;     // hay un documento traduciéndose
 const cache = new Map(); // `${tgt}\u0000${segmento}` -> traducción
 
 // ---------- Utilidades UI ----------
@@ -385,6 +386,7 @@ function segment(text) {
 }
 
 async function translateNow() {
+  if (docBusy) return;
   const text = els.src.value;
   if (!state.ready) { if (text.trim() && els.modelCard.hidden && els.loadingBox.hidden) showCard(); return; }
   // Cancela la traducción anterior y espera a que termine.
@@ -594,3 +596,332 @@ if (params.get('q')) { els.src.value = params.get('q'); onInput(); }
   // Solo limpia la URL cuando ya no habrá recarga por el service worker
   if (q.toString() && (self.crossOriginIsolated || !('serviceWorker' in navigator))) history.replaceState(null, '', location.pathname);
 })();
+
+
+// =====================================================================
+// ---------- Documentos de Word (.docx) conservando el formato ----------
+// Un .docx es un zip con XML. Se traduce párrafo a párrafo; los tramos con
+// formato distinto (negrita, enlaces, colores…) se marcan con etiquetas
+// <x1>…</x1> para que el modelo las respete y se devuelven a su sitio.
+// =====================================================================
+const W_NS = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+const XML_NS = 'http://www.w3.org/XML/1998/namespace';
+const DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+const D = id => document.getElementById(id);
+const del = {
+  modes: D('modes'), panes: document.querySelector('.panes'), pane: D('docsPane'), drop: D('drop'), input: D('docInput'),
+  card: D('docCard'), name: D('docName'), meta: D('docMeta'), remove: D('docRemove'), progress: D('docProgress'),
+  bar: D('docBar'), status: D('docStatus'), eta: D('docEta'), preview: D('docPreview'), translate: D('docTranslate'),
+  stop: D('docStop'), download: D('docDownload'), share: D('docShare'),
+};
+const docState = { file: null, parsed: null, result: null, ctrl: null };
+const docCache = new Map();
+
+function setMode(mode) {
+  store.set('mode', mode);
+  del.modes.querySelectorAll('[data-mode]').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('sel', on); b.setAttribute('aria-selected', on); });
+  del.panes.hidden = mode !== 'text';
+  del.pane.hidden = mode !== 'doc';
+  if (mode === 'text') onInput(); else if (docState.parsed) { state.detected = docState.parsed.lang; renderLangs(); }
+}
+del.modes.addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
+
+let jszipPromise;
+function loadJSZip() {
+  if (window.JSZip) return Promise.resolve(window.JSZip);
+  return jszipPromise ||= new Promise((ok, ko) => {
+    const sc = document.createElement('script'); sc.src = 'vendor/jszip/jszip.min.js';
+    sc.onload = () => ok(window.JSZip); sc.onerror = ko; document.head.appendChild(sc);
+  });
+}
+const isW = (n, name) => n && n.nodeType === 1 && n.namespaceURI === W_NS && n.localName === name;
+function closestPara(n) { for (let x = n.parentNode; x; x = x.parentNode) if (isW(x, 'p')) return x; return null; }
+
+async function parseDocx(file) {
+  const JSZip = await loadJSZip();
+  const zip = await JSZip.loadAsync(file);
+  const names = Object.keys(zip.files).filter(n => /^word\/(document|header\d*|footer\d*|footnotes|endnotes|comments)\.xml$/.test(n));
+  if (!names.includes('word/document.xml')) throw new Error('no-docx');
+  const ser = new XMLSerializer();
+  const parts = [], paras = [];
+  for (const name of names) {
+    const raw = await zip.file(name).async('string');
+    const doc = new DOMParser().parseFromString(raw, 'application/xml');
+    if (doc.getElementsByTagName('parsererror').length) continue;
+    const part = { name, doc, decl: (raw.match(/^<\?xml[^>]*\?>/) || [''])[0] };
+    parts.push(part);
+    for (const p of Array.from(doc.getElementsByTagNameNS(W_NS, 'p'))) {
+      const segs = []; let cur = null;
+      for (const r of Array.from(p.getElementsByTagNameNS(W_NS, 'r'))) {
+        if (closestPara(r) !== p) continue;                    // pertenece a un cuadro de texto interior
+        const kids = Array.from(r.childNodes);
+        const ts = kids.filter(k => isW(k, 't'));
+        const breaks = kids.some(k => isW(k, 'tab') || isW(k, 'br') || isW(k, 'drawing') || isW(k, 'pict') || isW(k, 'fldChar'));
+        if (!ts.length) { if (breaks) cur = null; continue; }
+        const rPr = kids.find(k => isW(k, 'rPr'));
+        const key = (rPr ? ser.serializeToString(rPr) : '') + '|' + r.parentNode.localName;
+        const text = ts.map(t => t.textContent).join('');
+        if (cur && cur.key === key) { cur.ts.push(...ts); cur.text += text; }
+        else { cur = { key, ts: [...ts], text }; segs.push(cur); }
+        if (breaks) cur = null;
+      }
+      const text = segs.map(x => x.text).join('');
+      if (!/\p{L}/u.test(text)) continue;
+      paras.push({ part, segs, text });
+    }
+  }
+  const sample = paras.slice(0, 40).map(x => x.text).join('\n').slice(0, 2000);
+  return { zip, parts, paras, chars: paras.reduce((a, x) => a + x.text.length, 0), lang: detect(sample) };
+}
+
+function setSegText(seg, text) {
+  seg.ts.forEach((t, i) => { t.textContent = i === 0 ? text : ''; });
+  seg.ts[0].setAttributeNS(XML_NS, 'xml:space', 'preserve');
+}
+
+function taggedPrompt(data, tgt) {
+  return `### Task\nTranslate the user-facing text within the following XML data into ${L[tgt].en}.\n\n### Strict Rules\n1. **Structure Preservation:** You MUST preserve the original XML data structure, nesting, hierarchy, and indentation exactly as they are.\n2. **Selective Translation:** Translate ONLY the visible, user-facing text content/values.\n3. **Strict Non-Translation:** NEVER translate or alter code tags, keys, properties, object names, or variable placeholders. Leave them exactly in their original English/code form.\n\n### Source Data\n${data}`;
+}
+
+class Degenerate extends Error {}
+async function llm(prompt, maxTokens, signal, onDelta) {
+  const c = new AbortController();
+  const relay = () => c.abort(); signal.addEventListener('abort', relay, { once: true });
+  let acc = '';
+  try {
+    const stream = await wllama.createChatCompletion({
+      messages: [{ role: 'user', content: prompt }], stream: true,
+      max_tokens: Math.min(3072, maxTokens), abortSignal: c.signal, ...SAMPLING,
+    });
+    for await (const ch of stream) {
+      if (c.signal.aborted) break;
+      const d = ch?.choices?.[0]?.delta?.content;
+      if (d) { acc += d; onDelta?.(acc); }
+      if (isDegenerate(acc)) { c.abort(); throw new Degenerate(); }
+    }
+  } finally { signal.removeEventListener('abort', relay); }
+  if (signal.aborted) throw new DOMException('aborted', 'AbortError');
+  return acc.trim();
+}
+
+// Traduce un texto plano (partiéndolo si es largo).
+async function translatePlain(text, tgt, src, signal, onDelta) {
+  const key = `${tgt}\u0000${text}`;
+  if (docCache.has(key)) return docCache.get(key);
+  const pieces = segment(text);
+  const out = [];
+  for (const pc of pieces) {
+    if ('sep' in pc) { out.push(pc.sep); continue; }
+    const lead = pc.text.match(/^\s*/)[0], trail = pc.text.match(/\s*$/)[0], core = pc.text.trim();
+    const done = out.join('');
+    const r = await llm(buildPrompt(core, tgt, src), core.length * 3 + 64, signal, a => onDelta?.(done + lead + a));
+    out.push(lead + r + trail);
+  }
+  const res = out.join('');
+  docCache.set(key, res);
+  return res;
+}
+
+async function translatePara(para, tgt, src, signal, onDelta) {
+  const live = para.segs.filter(x => /\S/.test(x.text));
+  if (!live.length) return;
+  const edge = t => [t.match(/^\s*/)[0], t.match(/\s*$/)[0]];
+  if (live.length === 1 || para.text.length > 1500) {
+    // Un solo formato (lo normal): todo el párrafo de una vez.
+    const first = live[0];
+    const [lead, trail] = edge(para.text);
+    const res = await translatePlain(para.text.trim(), tgt, src, signal, onDelta);
+    para.segs.forEach(x => { if (x !== first) setSegText(x, ''); });
+    setSegText(first, lead + res + trail);
+    return lead + res + trail;
+  }
+  // Varios formatos: etiquetas para conservar negritas, enlaces, etc.
+  const ids = new Map();
+  let data = '';
+  para.segs.forEach((x, i) => {
+    if (!/\S/.test(x.text)) { data += x.text; return; }
+    const [lead, trail] = edge(x.text);
+    ids.set(i, [lead, trail]);
+    data += `${lead}<x${i}>${x.text.trim()}</x${i}>${trail}`;
+  });
+  const key = `${tgt}\u0001${data}`;
+  let out = docCache.get(key);
+  if (out == null) {
+    out = await llm(taggedPrompt(data, tgt), data.length * 3 + 96, signal, a => onDelta?.(a.replace(/<\/?x\d+>/g, '')));
+    docCache.set(key, out);
+  }
+  const found = new Map();
+  for (const m of out.matchAll(/<x(\d+)>([\s\S]*?)<\/x\1>/g)) found.set(+m[1], m[2]);
+  const ok = [...ids.keys()].every(i => found.has(i) && /\S/.test(found.get(i)));
+  if (ok) {
+    ids.forEach(([lead, trail], i) => setSegText(para.segs[i], lead + found.get(i).trim() + trail));
+  } else {
+    // El modelo no respetó las etiquetas: se conserva el formato del primer tramo.
+    const plain = out.replace(/<\/?x\d+>/g, '').replace(/\s+/g, ' ').trim()
+      || await translatePlain(para.text.trim(), tgt, src, signal, onDelta);
+    const first = live[0];
+    para.segs.forEach(x => { if (x !== first && /\S/.test(x.text)) setSegText(x, ''); });
+    const [lead, trail] = edge(para.text);
+    setSegText(first, lead + plain + trail);
+  }
+  return para.segs.map(x => x.ts.map(t => t.textContent).join('')).join('');
+}
+
+function setDocLang(parts, tgt) {
+  const tag = L[tgt]?.speech || tgt;
+  for (const part of parts) for (const el of Array.from(part.doc.getElementsByTagNameNS(W_NS, 'lang'))) {
+    if (el.hasAttributeNS(W_NS, 'val')) el.setAttributeNS(W_NS, 'w:val', tag);
+  }
+}
+
+async function buildDocx(parsed, tgt) {
+  const ser = new XMLSerializer();
+  for (const part of parsed.parts) {
+    let xml = ser.serializeToString(part.doc);
+    if (part.decl && !xml.startsWith('<?xml')) xml = part.decl + '\n' + xml;
+    parsed.zip.file(part.name, xml);
+  }
+  // Idioma del documento para el corrector de Word
+  const st = parsed.zip.file('word/styles.xml');
+  if (st) {
+    const raw = await st.async('string');
+    const doc = new DOMParser().parseFromString(raw, 'application/xml');
+    if (!doc.getElementsByTagName('parsererror').length) {
+      setDocLang([{ doc }], tgt);
+      let xml = new XMLSerializer().serializeToString(doc);
+      const decl = (raw.match(/^<\?xml[^>]*\?>/) || [''])[0];
+      if (decl && !xml.startsWith('<?xml')) xml = decl + '\n' + xml;
+      parsed.zip.file('word/styles.xml', xml);
+    }
+  }
+  return parsed.zip.generateAsync({ type: 'blob', mimeType: DOCX_MIME, compression: 'DEFLATE' });
+}
+
+const fmtSize = b => b > 1048576 ? `${(b / 1048576).toFixed(1).replace('.', ',')} MB` : `${Math.max(1, Math.round(b / 1024))} KB`;
+const esc = s => s.replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+function resetDocUI() {
+  del.progress.hidden = true; del.preview.hidden = true; del.preview.innerHTML = '';
+  del.download.hidden = true; del.share.hidden = true; del.stop.hidden = true;
+  del.translate.hidden = false; del.translate.disabled = false; del.translate.textContent = 'Traducir documento';
+  docState.result = null;
+}
+
+async function openDoc(file) {
+  if (!file) return;
+  if (!/\.docx$/i.test(file.name)) { toast(/\.doc$/i.test(file.name) ? 'Guárdalo como .docx en Word y vuelve a probar' : 'Por ahora solo documentos de Word (.docx)'); return; }
+  if (docBusy) { toast('Espera a que termine el documento actual'); return; }
+  setMode('doc');
+  del.drop.hidden = true; del.card.hidden = false; resetDocUI();
+  del.name.textContent = file.name; del.meta.textContent = 'Leyendo…'; del.translate.disabled = true;
+  try {
+    const parsed = await parseDocx(file);
+    docState.file = file; docState.parsed = parsed;
+    if (!parsed.paras.length) { del.meta.textContent = 'No encontré texto para traducir'; return; }
+    const words = parsed.paras.reduce((a, x) => a + (x.text.match(/\S+/g) || []).length, 0);
+    del.meta.textContent = `${fmtSize(file.size)} · ${words.toLocaleString('es-ES')} palabras · ${parsed.paras.length} párrafos`;
+    state.detected = parsed.lang;
+    if (state.src === 'auto' && parsed.lang && parsed.lang === state.tgt) {
+      state.tgt = state.recent.find(c => c !== parsed.lang && L[c]) || (parsed.lang === 'es' ? 'en' : 'es'); store.set('tgt', state.tgt);
+    }
+    renderLangs();
+    del.translate.disabled = false;
+  } catch (e) {
+    console.error(e);
+    del.meta.textContent = 'No pude abrir este archivo. ¿Es un .docx válido?';
+  }
+}
+
+async function translateDoc() {
+  if (!docState.file) return;
+  if (!state.ready) {
+    setMode('text'); if (els.loadingBox.hidden) showCard();
+    toast('Primero descarga el traductor'); return;
+  }
+  job?.ctrl.abort();
+  const parsed = await parseDocx(docState.file);   // copia limpia cada vez
+  docState.parsed = parsed;
+  const tgt = state.tgt;
+  const src = state.src === 'auto' ? parsed.lang : state.src;
+  const ctrl = new AbortController(); docState.ctrl = ctrl;
+  docBusy = true;
+  del.translate.hidden = true; del.stop.hidden = false; del.download.hidden = true; del.share.hidden = true;
+  del.progress.hidden = false; del.preview.hidden = false; del.preview.innerHTML = '';
+  let lock = null; try { lock = await navigator.wakeLock?.request('screen'); } catch {}
+  const total = parsed.chars; let doneChars = 0; const t0 = performance.now(); let failed = 0;
+  const update = i => {
+    const pct = total ? (doneChars / total) * 100 : 0;
+    del.bar.style.width = pct.toFixed(1) + '%';
+    del.status.textContent = `Párrafo ${Math.min(i + 1, parsed.paras.length)} de ${parsed.paras.length}`;
+    const secs = (performance.now() - t0) / 1000;
+    if (doneChars > 0 && secs > 8) {
+      const left = Math.round(secs * (total - doneChars) / doneChars);
+      del.eta.textContent = left > 90 ? `faltan ~${Math.round(left / 60)} min` : left > 3 ? `faltan ~${left} s` : '';
+    } else del.eta.textContent = '';
+  };
+  try {
+    for (let i = 0; i < parsed.paras.length; i++) {
+      const para = parsed.paras[i];
+      update(i);
+      const p = document.createElement('p'); p.className = 'cur'; p.textContent = para.text;
+      del.preview.appendChild(p); p.scrollIntoView({ block: 'nearest' });
+      try {
+        const res = await translatePara(para, tgt, src, ctrl.signal, a => { p.textContent = a; });
+        p.textContent = res ?? para.text;
+      } catch (e) {
+        if (e instanceof Degenerate) {
+          if (currentGpu) {
+            store.set('gpuBroken', true);
+            toast('Tu GPU no traduce bien. Cambio al procesador, vuelve a pulsar Traducir.');
+            state.ready = false; loadModel(); throw new DOMException('aborted', 'AbortError');
+          }
+          failed++; p.textContent = para.text;
+        } else throw e;
+      }
+      p.classList.remove('cur');
+      doneChars += para.text.length;
+    }
+    update(parsed.paras.length - 1);
+    del.status.textContent = 'Preparando el archivo…'; del.eta.textContent = '';
+    const blob = await buildDocx(parsed, tgt);
+    const base = docState.file.name.replace(/\.docx$/i, '');
+    docState.result = new File([blob], `${base} (${L[tgt].name}).docx`, { type: DOCX_MIME });
+    del.bar.style.width = '100%';
+    const mins = Math.round((performance.now() - t0) / 60000);
+    del.status.textContent = failed ? `Listo · ${failed} párrafo${failed > 1 ? 's' : ''} sin traducir` : `Listo · traducido al ${L[tgt].name.toLowerCase()}`;
+    del.eta.textContent = mins >= 1 ? `${mins} min` : '';
+    del.download.hidden = false;
+    del.share.hidden = !(navigator.canShare && navigator.canShare({ files: [docState.result] }));
+    del.translate.hidden = false; del.translate.textContent = 'Repetir';
+  } catch (e) {
+    if (e?.name === 'AbortError') { del.status.textContent = 'Detenido'; }
+    else { console.error(e); del.status.textContent = 'Algo falló al traducir'; toast('Algo falló al traducir el documento'); }
+    del.eta.textContent = ''; del.translate.hidden = false; del.translate.textContent = 'Traducir documento';
+  } finally {
+    docBusy = false; del.stop.hidden = true; docState.ctrl = null;
+    try { await lock?.release(); } catch {}
+  }
+}
+
+function downloadDoc() {
+  const f = docState.result; if (!f) return;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(f); a.download = f.name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+}
+
+del.input.addEventListener('change', () => { openDoc(del.input.files[0]); del.input.value = ''; });
+['dragenter', 'dragover'].forEach(ev => del.drop.addEventListener(ev, e => { e.preventDefault(); del.drop.classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => del.drop.addEventListener(ev, e => { e.preventDefault(); del.drop.classList.remove('over'); }));
+del.drop.addEventListener('drop', e => openDoc(e.dataTransfer.files[0]));
+addEventListener('dragover', e => { if ([...(e.dataTransfer?.types || [])].includes('Files')) e.preventDefault(); });
+addEventListener('drop', e => { if (e.dataTransfer?.files?.length && !del.drop.contains(e.target)) { e.preventDefault(); openDoc(e.dataTransfer.files[0]); } });
+del.translate.addEventListener('click', translateDoc);
+del.stop.addEventListener('click', () => docState.ctrl?.abort());
+del.download.addEventListener('click', downloadDoc);
+del.share.addEventListener('click', () => docState.result && navigator.share({ files: [docState.result], title: docState.result.name }).catch(() => {}));
+del.remove.addEventListener('click', () => {
+  docState.ctrl?.abort(); docState.file = docState.parsed = docState.result = null;
+  del.card.hidden = true; del.drop.hidden = false; resetDocUI();
+});
+setMode(store.get('mode', 'text'));
