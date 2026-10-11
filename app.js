@@ -224,14 +224,43 @@ function renderLangs() {
   els.src.dir = ['ar', 'he', 'fa', 'ur', 'ug'].includes(els.src.lang) ? 'rtl' : 'ltr';
 }
 function renderOutput(text, streaming) {
+  const prev = state.output || '', wasStreaming = els.out.classList.contains('streaming');
   state.output = text;
   els.out.classList.toggle('streaming', !!streaming);
   const has = !!text && !streaming;
+  const hadTools = !els.copy.disabled;
   els.copy.disabled = els.speakOut.disabled = els.share.disabled = !has;
+  if (has && !hadTools) { const t = els.copy.closest('.tools'); t?.classList.remove('appear'); void t?.offsetWidth; t?.classList.add('appear'); }
   if (!text && streaming) { els.out.innerHTML = '<span class="skel"></span><span class="skel"></span><span class="skel"></span>'; return; }
   if (!text) { els.out.innerHTML = '<span class="placeholder">Traducción</span>'; return; }
+  // Mientras se genera: solo se añade lo nuevo, que entra fundiéndose.
+  if (streaming && wasStreaming && prev && text.startsWith(prev) && els.out.querySelector('.skel') == null) {
+    const d = text.slice(prev.length);
+    if (d) { const s = document.createElement('span'); s.className = 'tk'; s.textContent = d; els.out.appendChild(s); }
+    return;
+  }
+  // Al terminar de generar: se consolida el texto y se asienta el color.
+  if (!streaming && wasStreaming && text === prev) {
+    els.out.textContent = text; els.out.classList.remove('settle'); void els.out.offsetWidth; els.out.classList.add('settle');
+    return;
+  }
+  // Resultado instantáneo (caché, historial, traducción rápida): las palabras aparecen en cascada.
+  if (!streaming && text !== prev && text.length <= 700 && !reduceMotion()) {
+    els.out.textContent = '';
+    const parts = text.split(/(\s+)/); let i = 0;
+    const frag = document.createDocumentFragment();
+    for (const p of parts) {
+      if (!p) continue;
+      if (/^\s+$/.test(p)) { frag.appendChild(document.createTextNode(p)); continue; }
+      const s = document.createElement('span'); s.className = 'rv'; s.style.setProperty('--d', Math.min(i++ * 0.018, 0.4) + 's'); s.textContent = p; frag.appendChild(s);
+    }
+    els.out.appendChild(frag);
+    clearTimeout(renderOutput.t); renderOutput.t = setTimeout(() => { if (state.output === text && !els.out.classList.contains('streaming')) els.out.textContent = text; }, 1000);
+    return;
+  }
   els.out.textContent = text;
 }
+const reduceMotion = () => matchMedia('(prefers-reduced-motion:reduce)').matches;
 function pushRecent(code) {
   state.recent = [code, ...state.recent.filter(c => c !== code)].slice(0, 5);
   store.set('recent', state.recent);
@@ -308,6 +337,7 @@ els.swap.addEventListener('click', () => {
   const from = state.src === 'auto' ? (state.detected || null) : state.src;
   if (!from) { toast('Escribe algo primero para saber el idioma de origen'); return; }
   els.swap._r = (els.swap._r || 0) + 180; els.swap.style.setProperty('--r', els.swap._r + 'deg'); haptic();
+  els.swap.classList.remove('spin'); void els.swap.offsetWidth; els.swap.classList.add('spin');
   const bar = els.swap.parentElement; bar.classList.remove('swapping'); void bar.offsetWidth; bar.classList.add('swapping');
   clearTimeout(bar._t); bar._t = setTimeout(() => bar.classList.remove('swapping'), 400);
   const newSrc = state.tgt, newTgt = from;
@@ -614,6 +644,7 @@ function onInput(immediate) {
   els.count.textContent = `${v.length.toLocaleString('es-ES')} / 5000`;
   els.count.classList.toggle('near', v.length >= 4800);
   els.count.classList.toggle('zero', !v.length);
+  if (v.length >= 5000) { els.count.classList.remove('full'); void els.count.offsetWidth; els.count.classList.add('full'); } else els.count.classList.remove('full');
   document.getElementById('copySrcBtn').disabled = !v.trim();
   els.clear.hidden = !v;
   state.detected = detect(v);
@@ -1175,7 +1206,8 @@ function setMode(mode) {
     const pane = mode === 'text' ? del.panes : mode === 'doc' ? del.pane : mode === 'talk' ? document.getElementById('talkPane') : document.getElementById('camPane');
     pane.classList.remove('enter'); void pane.offsetWidth; pane.classList.add('enter');
   }
-  del.modes.querySelectorAll('[data-mode]').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('sel', on); b.setAttribute('aria-selected', on); });
+  del.modes.querySelectorAll('[data-mode]').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('sel', on); b.classList.toggle('just', on && prev !== mode); b.setAttribute('aria-selected', on); });
+  moveTabInd();
   del.panes.hidden = mode !== 'text';
   document.getElementById('camPane').hidden = mode !== 'cam';
   del.pane.hidden = mode !== 'doc';
@@ -1187,6 +1219,18 @@ function setMode(mode) {
   else if (mode === 'doc' && docState.parsed) { state.detected = docState.parsed.lang; renderLangs(); }
   else if (mode === 'cam' && window.camState?.lang) { state.detected = camState.lang; renderLangs(); }
 }
+// Píldora deslizante bajo la pestaña elegida (sigue también el ancho de la etiqueta en el móvil).
+function moveTabInd() {
+  const ind = del.modes.querySelector('.tab-ind'), sel = del.modes.querySelector('.sel');
+  if (!ind || !sel) return;
+  del.modes.style.setProperty('--x', sel.offsetLeft + 'px');
+  del.modes.style.setProperty('--w', sel.offsetWidth + 'px');
+  ind.style.setProperty('--x', sel.offsetLeft + 'px'); ind.style.setProperty('--w', sel.offsetWidth + 'px');
+  if (!del.modes.classList.contains('has-ind')) requestAnimationFrame(() => del.modes.classList.add('has-ind'));
+}
+if ('ResizeObserver' in window) { const ro = new ResizeObserver(() => moveTabInd()); del.modes.querySelectorAll('[data-mode]').forEach(b => ro.observe(b)); }
+addEventListener('resize', moveTabInd, { passive: true });
+document.fonts?.ready.then(moveTabInd);
 del.modes.addEventListener('click', e => { const b = e.target.closest('[data-mode]'); if (b) setMode(b.dataset.mode); });
 
 let jszipPromise;
@@ -2128,3 +2172,13 @@ addEventListener('paste', e => {
   const qm = new URLSearchParams(location.search).get('mode');
   setMode(['cam', 'doc', 'talk'].includes(qm) ? qm : store.get('mode', 'text'));
 }
+
+// ---------- Pulido: cabecera translúcida al hacer scroll y entrada inicial ----------
+(() => {
+  const top = document.querySelector('.top');
+  let on = false;
+  const tick = () => { const s = scrollY > 4; if (s !== on) { on = s; top?.classList.toggle('scrolled', s); } };
+  addEventListener('scroll', tick, { passive: true }); tick();
+  document.body.classList.add('boot');
+  setTimeout(() => document.body.classList.remove('boot'), 900);
+})();

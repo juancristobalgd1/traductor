@@ -181,7 +181,7 @@ textarea::placeholder{color:var(--faint)}
 .sheet-backdrop{position:fixed;inset:0;z-index:40;display:flex;align-items:flex-end;justify-content:center;background:rgba(0,0,0,0);transition:background var(--mid)}
 .sheet-backdrop.open{background:rgba(0,0,0,.32)}
 .sheet{width:100%;max-width:520px;max-height:86vh;max-height:86dvh;display:flex;flex-direction:column;background:var(--card);border-radius:20px 20px 0 0;box-shadow:var(--shadow-pop);
-  padding-bottom:env(safe-area-inset-bottom);transform:translateY(100%);transition:transform .32s var(--ease);will-change:transform}
+  padding-bottom:env(safe-area-inset-bottom);transform:translateY(100%);transition:transform .44s cubic-bezier(.32,.72,0,1);will-change:transform}
 .sheet-backdrop.open .sheet{transform:none}
 .sheet.dragging{transition:none}
 @media (min-width:700px){
@@ -422,3 +422,77 @@ body.mode-talk .langbar,body.mode-talk .foot-note{display:none}
 .talk.enter{animation:enter var(--mid) var(--ease)}
 @media (prefers-reduced-motion:reduce){.turn,.talk-mic.wait::after,#talkLayaBtn .lring,#talkLayaBtn .lbar,#talkLayaBtn .spark{animation:none!important;transition:none!important}.talk-mic::before{transition:none}}
 html{scroll-padding-top:calc(72px + env(safe-area-inset-top))}
+
+/* ==========================================================================
+   Pulido · microinteracciones premium
+   ========================================================================== */
+:root{--sheet:cubic-bezier(.32,.72,0,1);--soft-spring:cubic-bezier(.22,1.3,.36,1)}
+/* Cabecera: al hacer scroll se vuelve translúcida con desenfoque, sin bordes ni color. */
+.top{transition:background .3s var(--ease),-webkit-backdrop-filter .3s,backdrop-filter .3s}
+.top.scrolled{background:color-mix(in srgb,var(--bg) 78%,transparent);-webkit-backdrop-filter:saturate(1.8) blur(18px);backdrop-filter:saturate(1.8) blur(18px)}
+/* Pestañas: la píldora gris se desliza hasta la pestaña elegida. */
+.modes{position:relative}
+.modes .tab-ind{position:absolute;left:0;top:50%;height:36px;width:var(--w,0);margin-top:-18px;border-radius:var(--r-sm);background:var(--surface);transform:translateX(var(--x,0));opacity:0;pointer-events:none;z-index:0;transition:transform .5s var(--soft-spring),width .5s var(--soft-spring),opacity .2s}
+@media (prefers-color-scheme:dark){.modes .tab-ind{background:var(--surface-2)}}
+.modes.has-ind .tab-ind{opacity:1}
+.modes.has-ind button{position:relative;z-index:1}
+.modes.has-ind button.sel{background:transparent}
+.modes button svg{transition:transform .45s var(--soft-spring)}
+.modes button.sel.just svg{animation:tabicon .5s var(--soft-spring)}
+@keyframes tabicon{40%{transform:translateY(-2px) scale(1.12)}}
+/* Cambio de modo: entra con un leve desenfoque que se aclara. */
+@keyframes enter{from{opacity:0;transform:translateY(8px);filter:blur(3px)}}
+/* Arranque: la interfaz aparece escalonada, una sola vez. */
+body.boot .langbar{animation:bootin .5s var(--ease) both}
+body.boot .panes,body.boot .docs,body.boot .cam,body.boot .talk{animation:bootin .55s var(--ease) .06s both}
+@keyframes bootin{from{opacity:0;transform:translateY(10px)}}
+/* Traducción: cada fragmento nuevo entra fundiéndose, sin saltos. */
+.output .tk{animation:tk .38s var(--ease) both}
+@keyframes tk{from{opacity:0;filter:blur(3px)}}
+.output .rv{display:inline;animation:rv .5s var(--ease) both;animation-delay:var(--d,0s)}
+@keyframes rv{from{opacity:0;filter:blur(4px);transform:translateY(3px)}}
+.output.streaming::after{transition:opacity .2s}
+.output.settle{animation:settle .6s var(--ease)}
+@keyframes settle{from{color:color-mix(in srgb,var(--text) 82%,var(--surface))}}
+/* Herramientas: aparecen en cascada cuando ya hay algo que copiar o escuchar. */
+.tools.appear .icon-btn:not(:disabled){animation:toolin .45s var(--soft-spring) both}
+.tools.appear .icon-btn:nth-child(2){animation-delay:.04s}
+.tools.appear .icon-btn:nth-child(3){animation-delay:.08s}
+.tools.appear .icon-btn:nth-child(4){animation-delay:.12s}
+@keyframes toolin{from{opacity:.28;transform:scale(.82)}}
+/* Éxito (copiar, compartir): el check se dibuja y deja una onda suave. */
+.icon-btn .ok-icon path{stroke-dasharray:21;stroke-dashoffset:21;transition:stroke-dashoffset .38s var(--ease) .06s}
+.icon-btn.done .ok-icon path{stroke-dashoffset:0}
+.icon-btn.done::after{content:"";position:absolute;inset:0;border-radius:50%;background:color-mix(in srgb,var(--ok) 16%,transparent);animation:burst .6s var(--ease) forwards;pointer-events:none}
+@keyframes burst{from{transform:scale(.6);opacity:1}to{transform:scale(1.6);opacity:0}}
+/* Botón principal: se eleva un poco al pasar el ratón. */
+@media (hover:hover){.primary:not(:disabled):hover{transform:translateY(-1px);box-shadow:0 8px 20px color-mix(in srgb,var(--accent) 26%,transparent)}}
+.primary:not(:disabled):active{transform:scale(.97);box-shadow:none}
+/* Intercambiar idiomas: giro con muelle y un pequeño pulso. */
+.swap svg{transition:transform .55s var(--soft-spring)}
+.swap.spin{animation:swappulse .45s var(--ease)}
+@keyframes swappulse{40%{background:var(--surface-2)}}
+/* Idioma detectado: la etiqueta "auto" aparece con un toque. */
+.lang-pill.auto::after{animation:pop .35s var(--soft-spring)}
+/* Escribir: el marcador de posición se atenúa al enfocar, la X gira al pasar. */
+textarea::placeholder{transition:opacity .25s,transform .25s var(--ease)}
+textarea:focus::placeholder{opacity:.55}
+.clear{animation:pop .3s var(--soft-spring)}
+@media (hover:hover){.clear:hover svg{transform:rotate(90deg)}}
+.clear svg{transition:transform .35s var(--soft-spring)}
+/* Límite de caracteres: un leve temblor al llegar al tope. */
+.count.full{animation:nudge .32s var(--ease)}
+@keyframes nudge{25%{transform:translateX(-3px)}75%{transform:translateX(3px)}}
+/* Aviso inferior: entra con muelle y algo de desenfoque. */
+.toast{transition:opacity .25s,transform .45s var(--soft-spring),filter .3s;filter:blur(2px)}
+.toast.show{filter:none;transform:translate(-50%,0) scale(1)}
+/* Hojas: elementos de lista con respuesta al toque. */
+.sheet-list button{transition:background var(--fast),transform .3s var(--soft-spring)}
+.sheet-list button:active{transform:scale(.985)}
+/* Zona de soltar archivos: respira al arrastrar encima. */
+.drop{transition:border-color var(--fast),background var(--fast),transform .4s var(--soft-spring)}
+.drop.over{transform:scale(1.01)}
+@media (prefers-reduced-motion:reduce){
+  .modes .tab-ind{transition:none}.output .tk,.output .rv,.output.settle,.tools.appear .icon-btn,.icon-btn.done::after,body.boot *{animation:none!important}
+  .top{transition:none}
+}
