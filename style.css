@@ -373,24 +373,37 @@ body.mode-talk .langbar,body.mode-talk .foot-note{display:none}
 .turn .play{position:absolute;right:6px;bottom:6px;width:34px;height:34px}
 .turn .play svg{width:18px;height:18px}
 .turn.live .play{display:none}
-.talk-bar{position:sticky;bottom:0;z-index:5;display:grid;grid-template-columns:1fr auto 1fr;align-items:end;gap:8px;padding:14px 0 calc(6px + env(safe-area-inset-bottom));background:linear-gradient(to top,var(--bg) 78%,transparent)}
-.talk-side{display:flex;flex-direction:column;align-items:center;gap:8px;min-width:0}
-.talk-mic{position:relative;display:grid;place-items:center;width:68px;height:68px;border-radius:50%;background:var(--surface);color:var(--text);transition:background var(--fast),color var(--fast),transform .2s var(--spring)}
-.talk-mic svg{width:26px;height:26px;stroke-width:1.6}
+.talk-bar{position:sticky;bottom:0;z-index:5;display:flex;flex-direction:column;align-items:center;gap:10px;padding:14px 0 calc(8px + env(safe-area-inset-bottom));background:linear-gradient(to top,var(--bg) 80%,transparent)}
+.talk-langs{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:4px;width:100%;max-width:420px}
+.talk-langs #talkLangA{justify-self:end}.talk-langs #talkLangB{justify-self:start}
+.talk-swap svg{width:18px;height:18px}
+.talk-row{display:grid;grid-template-columns:1fr auto 1fr;align-items:center;gap:18px;width:100%;max-width:420px}
+.talk-tools{display:flex;gap:4px}.talk-tools.l{justify-content:flex-end}.talk-tools.r{justify-content:flex-start}
+.talk-mic{--lvl:0;position:relative;display:grid;place-items:center;width:76px;height:76px;border-radius:50%;background:var(--surface);color:var(--text);transition:background var(--fast),color var(--fast),transform .2s var(--spring)}
+.talk-mic svg{position:relative;z-index:1;width:28px;height:28px;stroke-width:1.6}
 @media (hover:hover){.talk-mic:hover{background:var(--surface-2)}}
 .talk-mic:active{transform:scale(.93)}
+.talk-mic::before{content:"";position:absolute;inset:0;border-radius:50%;background:var(--accent);opacity:0;transform:scale(1);transition:transform 90ms linear,opacity var(--fast)}
 .talk-mic.on{background:var(--accent);color:#fff}
-.talk-mic.on::after{content:"";position:absolute;inset:0;border-radius:50%;border:2px solid var(--accent);animation:pulse 1.4s var(--ease) infinite}
+.talk-mic.on::before{opacity:.16;transform:scale(calc(1 + var(--lvl) * .45))}
+.talk-mic.wait{background:var(--surface);color:var(--muted)}
+.talk-mic.wait::after{content:"";position:absolute;inset:-3px;border-radius:50%;border:2px solid transparent;border-top-color:var(--accent);animation:spin 1s linear infinite}
 .talk-mic:disabled{opacity:.4}
-.talk-lang{display:inline-flex;align-items:center;gap:4px;max-width:100%;height:32px;padding:0 10px;border-radius:var(--r-sm);font-size:14px;font-weight:600;color:var(--text)}
+.talk-status{min-height:18px;margin:0;font-size:13px;color:var(--muted);text-align:center;transition:color var(--fast)}
+.talk-status.live{color:var(--text)}
+.talk-lang{display:inline-flex;align-items:center;gap:4px;max-width:100%;height:34px;padding:0 10px;border-radius:var(--r-sm);font-size:15px;font-weight:600;color:var(--text)}
 .talk-lang span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .talk-lang svg{width:16px;height:16px;color:var(--muted)}
 @media (hover:hover){.talk-lang:hover{background:var(--surface)}}
-.talk-mid{display:flex;flex-direction:column;gap:6px;padding-bottom:20px}
+#talkLayaBtn{color:var(--faint)}
+#talkLayaBtn[aria-pressed="true"]{color:var(--accent)}
+#talkLayaBtn.loading svg{animation:breathe 1.2s var(--ease) infinite}
+@keyframes breathe{50%{opacity:.35}}
+.turn.pending{align-self:center;padding-right:16px}
 #talkVoiceBtn .off-icon{display:none}
 #talkVoiceBtn[aria-pressed="false"] svg:first-child{display:none}
 #talkVoiceBtn[aria-pressed="false"] .off-icon{display:block}
 #talkVoiceBtn[aria-pressed="false"]{color:var(--faint)}
 .talk.enter{animation:enter var(--mid) var(--ease)}
-@media (prefers-reduced-motion:reduce){.turn,.talk-mic.on::after{animation:none}}
+@media (prefers-reduced-motion:reduce){.turn,.talk-mic.wait::after,#talkLayaBtn.loading svg{animation:none}.talk-mic::before{transition:none}}
 html{scroll-padding-top:calc(72px + env(safe-area-inset-top))}
