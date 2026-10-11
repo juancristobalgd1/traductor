@@ -241,11 +241,11 @@ function pushRecent(code) {
 let picking = 'tgt';
 function openPicker(which) {
   picking = which;
-  els.sheetTitle.textContent = which === 'src' ? 'Traducir del' : 'Traducir a';
+  els.sheetTitle.textContent = which === 'src' ? 'Traducir del' : which === 'tgt' ? 'Traducir a' : 'Idioma de esta persona';
   els.sheetSearch.value = '';
   els.sheetList.classList.remove('filtering');
   fillPicker('');
-  openSheet(els.sheet, which === 'src' ? els.srcBtn : els.tgtBtn);
+  openSheet(els.sheet, which === 'src' ? els.srcBtn : which === 'tgt' ? els.tgtBtn : document.getElementById(which === 'ta' ? 'talkLangA' : 'talkLangB'));
   els.sheetList.scrollTop = 0;
   // En móvil no abrimos el teclado de golpe: tapa media lista.
   if (matchMedia('(pointer:fine)').matches) setTimeout(() => els.sheetSearch.focus({ preventScroll: true }), 60);
@@ -253,7 +253,7 @@ function openPicker(which) {
 function fillPicker(q) {
   const norm = s => s.normalize('NFD').replace(/\p{M}/gu, '').toLowerCase();
   const nq = norm(q);
-  const current = picking === 'src' ? state.src : state.tgt;
+  const current = picking === 'src' ? state.src : picking === 'tgt' ? state.tgt : talk[picking === 'ta' ? 'a' : 'b'];
   const opt = l => `<button class="opt ${l.code === current ? 'sel' : ''}" data-code="${l.code}"><span>${l.name}</span></button>`;
   let html = '';
   if (!nq) {
@@ -281,6 +281,12 @@ els.sheetSearch.addEventListener('keydown', e => {
 els.sheetList.addEventListener('click', e => {
   const b = e.target.closest('[data-code]'); if (!b) return;
   const code = b.dataset.code;
+  if (picking === 'ta' || picking === 'tb') {
+    const me = picking === 'ta' ? 'a' : 'b', other = me === 'a' ? 'b' : 'a';
+    if (talk[other] === code) talk[other] = talk[me];
+    talk[me] = code; store.set('talk', { a: talk.a, b: talk.b }); pushRecent(code);
+    haptic(); closeSheets(); talkRender(); return;
+  }
   if (picking === 'src') {
     if (code === state.tgt && code !== 'auto') { state.tgt = state.src === 'auto' ? (state.detected && state.detected !== code ? state.detected : (code === 'es' ? 'en' : 'es')) : state.src; store.set('tgt', state.tgt); }
     state.src = code; store.set('src', code);
@@ -431,6 +437,7 @@ async function loadModel() {
   store.set('ready', true);
   protectStorage().then(ok => { if (ok && !fromCache) toast('Modelo guardado en tu dispositivo. Ya no se volverá a descargar.'); renderStorage(); });
   state.ready = true;
+  readyWaiters.splice(0).forEach(f => f());
   const threads = wllama.getNumThreads?.() ?? 1;
   els.chip.textContent = gpu ? 'GPU' : 'CPU'; els.chip.hidden = false;
   els.infoBackend.textContent = gpu ? 'GPU (WebGPU)' : `Procesador · ${threads} ${threads === 1 ? 'hilo' : 'hilos'}`;
@@ -660,22 +667,152 @@ els.speakOut.addEventListener('click', () => speak(state.output, state.tgt, els.
 
 const Rec = window.SpeechRecognition || window.webkitSpeechRecognition;
 if (!Rec) els.mic.hidden = true;
+// Reconocedor de voz: si el navegador puede hacerlo dentro del dispositivo, lo pido así.
+async function makeRec(code) {
+  const r = new Rec();
+  r.lang = L[code]?.speech || code;
+  r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
+  try {
+    if ('processLocally' in r && Rec.available && (await Rec.available({ langs: [r.lang], processLocally: true })) === 'available') r.processLocally = true;
+  } catch {}
+  return r;
+}
+const recError = e => toast(e?.error === 'not-allowed' || e?.error === 'service-not-allowed' ? 'Permite el micrófono para dictar'
+  : e?.error === 'network' ? 'El dictado necesita conexión en este navegador'
+  : e?.error === 'no-speech' ? 'No te he oído, prueba otra vez'
+  : e?.error === 'language-not-supported' ? 'Tu navegador no dicta en este idioma' : 'No pude escucharte');
 let rec = null;
-els.mic.addEventListener('click', () => {
+els.mic.addEventListener('click', async () => {
   if (rec) { rec.stop(); return; }
-  rec = new Rec();
+  speechSynthesis?.cancel?.();
   const code = state.src === 'auto' ? (state.detected || browserLang) : state.src;
-  rec.lang = L[code]?.speech || code;
-  rec.interimResults = true; rec.continuous = false;
+  rec = await makeRec(code);
   const before = els.src.value ? els.src.value.replace(/\s*$/, ' ') : '';
   rec.onresult = e => {
     const said = Array.from(e.results).map(r => r[0].transcript).join('');
     els.src.value = before + said; onInput(false);
   };
   rec.onend = () => { els.mic.classList.remove('on'); rec = null; };
-  rec.onerror = () => toast('No pude escucharte');
-  els.mic.classList.add('on'); rec.start();
+  rec.onerror = e => { if (e.error !== 'aborted') recError(e); };
+  els.mic.classList.add('on'); haptic(8);
+  try { rec.start(); } catch { els.mic.classList.remove('on'); rec = null; }
 });
+
+// ---------- Conversación ----------
+const readyWaiters = [];
+const whenReady = () => state.ready ? Promise.resolve() : new Promise(f => readyWaiters.push(f));
+const talkSaved = store.get('talk', null);
+const talk = {
+  a: talkSaved?.a && L[talkSaved.a] ? talkSaved.a : (state.src !== 'auto' && L[state.src] ? state.src : L[browserLang] ? browserLang : 'es'),
+  b: talkSaved?.b && L[talkSaved.b] ? talkSaved.b : state.tgt,
+  voice: store.get('talkVoice', true), rec: null, side: null, busy: Promise.resolve(), turns: 0,
+};
+if (talk.a === talk.b) talk.b = talk.a === 'en' ? 'es' : 'en';
+const T = id => document.getElementById(id);
+const tel = { list: T('talkList'), empty: T('talkEmpty'), micA: T('talkMicA'), micB: T('talkMicB'), langA: T('talkLangA'), langB: T('talkLangB'), voice: T('talkVoiceBtn'), clear: T('talkClearBtn'), note: T('talkNote') };
+const SPK_SVG = '<svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg>';
+function talkRender() {
+  tel.langA.firstChild.textContent = L[talk.a].name;
+  tel.langB.firstChild.textContent = L[talk.b].name;
+  tel.micA.setAttribute('aria-label', 'Hablar en ' + L[talk.a].name.toLowerCase());
+  tel.micB.setAttribute('aria-label', 'Hablar en ' + L[talk.b].name.toLowerCase());
+  tel.voice.setAttribute('aria-pressed', String(talk.voice));
+  tel.voice.dataset.tip = talk.voice ? 'Voz activada' : 'Voz desactivada';
+  if (!Rec) { tel.micA.disabled = tel.micB.disabled = true; tel.note.textContent = 'Tu navegador no permite dictar. Prueba en Chrome, Edge o Safari.'; }
+}
+window.talkRender = talkRender;
+function talkStop() { try { talk.rec?.abort(); } catch {} talk.rec = null; tel.micA.classList.remove('on'); tel.micB.classList.remove('on'); }
+window.talkStop = talkStop;
+function addTurn(side) {
+  tel.empty.hidden = true; tel.clear.disabled = false;
+  const d = document.createElement('div');
+  d.className = 'turn live ' + side;
+  d.innerHTML = '<div class="said"></div><div class="heard"></div>';
+  const play = document.createElement('button');
+  play.className = 'icon-btn play'; play.setAttribute('aria-label', 'Escuchar'); play.innerHTML = SPK_SVG;
+  d.appendChild(play);
+  tel.list.appendChild(d);
+  d.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  return d;
+}
+const scrollEnd = () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
+async function translateOne(text, src, tgt, onDelta) {
+  const key = `${tgt}\u0000${text}`;
+  if (cache.has(key)) { onDelta?.(cache.get(key)); return cache.get(key); }
+  if (job) { job.ctrl.abort(); await job.done.catch(() => {}); }
+  let out = '';
+  const parts = segment(text);
+  for (const p of parts) {
+    if ('sep' in p) { out += p.sep; continue; }
+    let acc = '';
+    const stream = await wllama.createChatCompletion({
+      messages: [{ role: 'user', content: buildPrompt(p.text.trim(), tgt, src) }],
+      stream: true, max_tokens: Math.min(1024, p.text.length * 3 + 64), ...SAMPLING,
+    });
+    for await (const chunk of stream) {
+      const dd = chunk?.choices?.[0]?.delta?.content;
+      if (dd) { acc += dd; onDelta?.(out + acc); }
+      if (isDegenerate(acc)) break;
+    }
+    out += acc.trim() + (/\s$/.test(p.text) ? ' ' : '');
+  }
+  out = out.trim(); cache.set(key, out);
+  return out;
+}
+async function talkListen(side) {
+  if (!Rec) return;
+  if (talk.rec) { const same = talk.side === side; talk.rec.stop(); if (same) return; await new Promise(r => setTimeout(r, 120)); }
+  if (!state.ready && !state.loading) {
+    toast('Primero descarga el traductor'); setMode('text'); showCard(); return;
+  }
+  speechSynthesis?.cancel?.();
+  const src = talk[side], tgt = talk[side === 'a' ? 'b' : 'a'];
+  const mic = side === 'a' ? tel.micA : tel.micB;
+  const r = await makeRec(src);
+  talk.rec = r; talk.side = side;
+  const turn = addTurn(side);
+  const said = turn.querySelector('.said'), heard = turn.querySelector('.heard');
+  let text = '';
+  r.onresult = e => { text = Array.from(e.results).map(x => x[0].transcript).join(''); said.textContent = text; scrollEnd(); };
+  r.onerror = e => { if (e.error !== 'aborted' && e.error !== 'no-speech') recError(e); };
+  r.onend = () => {
+    mic.classList.remove('on'); if (talk.rec === r) talk.rec = null;
+    text = text.trim();
+    if (!text) { turn.remove(); if (!tel.list.querySelector('.turn')) { tel.empty.hidden = false; tel.clear.disabled = true; } return; }
+    turn.classList.remove('live');
+    heard.classList.add('wait');
+    const play = turn.querySelector('.play');
+    play.onclick = () => speak(heard.textContent, tgt, play);
+    // Las traducciones van en fila, una detrás de otra.
+    talk.busy = talk.busy.then(async () => {
+      try {
+        if (!state.ready) await whenReady();
+        const out = await translateOne(text, src, tgt, partial => { heard.classList.remove('wait'); heard.textContent = partial; });
+        heard.classList.remove('wait'); heard.textContent = out;
+        scrollEnd();
+        if (talk.voice && out && !talk.rec) speak(out, tgt, play);
+      } catch (err) {
+        console.error(err); heard.classList.remove('wait'); heard.textContent = ''; toast('Algo falló al traducir. Prueba otra vez.');
+      }
+    });
+  };
+  mic.classList.add('on'); haptic(8);
+  try { r.start(); } catch { mic.classList.remove('on'); talk.rec = null; turn.remove(); }
+}
+tel.micA.addEventListener('click', () => talkListen('a'));
+tel.micB.addEventListener('click', () => talkListen('b'));
+tel.langA.addEventListener('click', () => openPicker('ta'));
+tel.langB.addEventListener('click', () => openPicker('tb'));
+tel.voice.addEventListener('click', () => {
+  talk.voice = !talk.voice; store.set('talkVoice', talk.voice); if (!talk.voice) speechSynthesis?.cancel?.();
+  haptic(); talkRender(); toast(talk.voice ? 'Leeré las traducciones en voz alta' : 'Sin voz: solo texto');
+});
+tel.clear.addEventListener('click', () => {
+  talkStop(); speechSynthesis?.cancel?.();
+  tel.list.querySelectorAll('.turn').forEach(t => t.remove());
+  tel.empty.hidden = false; tel.clear.disabled = true; haptic();
+});
+talkRender();
 
 // ---------- Historial ----------
 function saveHistory(src, out) {
@@ -814,17 +951,21 @@ const docCache = new Map();
 function setMode(mode) {
   const prev = store.get('mode', 'text');
   store.set('mode', mode);
-  const idx = ['text', 'doc', 'cam'].indexOf(mode);
+  const idx = ['text', 'doc', 'cam', 'talk'].indexOf(mode);
   del.modes.style.setProperty('--i', Math.max(0, idx));
   if (prev !== mode) {
     haptic(6);
-    const pane = mode === 'text' ? del.panes : mode === 'doc' ? del.pane : document.getElementById('camPane');
+    const pane = mode === 'text' ? del.panes : mode === 'doc' ? del.pane : mode === 'talk' ? document.getElementById('talkPane') : document.getElementById('camPane');
     pane.classList.remove('enter'); void pane.offsetWidth; pane.classList.add('enter');
   }
   del.modes.querySelectorAll('[data-mode]').forEach(b => { const on = b.dataset.mode === mode; b.classList.toggle('sel', on); b.setAttribute('aria-selected', on); });
   del.panes.hidden = mode !== 'text';
   document.getElementById('camPane').hidden = mode !== 'cam';
   del.pane.hidden = mode !== 'doc';
+  document.getElementById('talkPane').hidden = mode !== 'talk';
+  document.body.classList.toggle('mode-talk', mode === 'talk');
+  if (mode !== 'talk') window.talkStop?.();
+  else window.talkRender?.();
   if (mode === 'text') onInput();
   else if (mode === 'doc' && docState.parsed) { state.detected = docState.parsed.lang; renderLangs(); }
   else if (mode === 'cam' && window.camState?.lang) { state.detected = camState.lang; renderLangs(); }
@@ -1768,5 +1909,5 @@ addEventListener('paste', e => {
 });
 {
   const qm = new URLSearchParams(location.search).get('mode');
-  setMode(qm === 'cam' || qm === 'doc' ? qm : store.get('mode', 'text'));
+  setMode(['cam', 'doc', 'talk'].includes(qm) ? qm : store.get('mode', 'text'));
 }

@@ -15,7 +15,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Traductor">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
-<link rel="stylesheet" href="style.css?v=14">
+<link rel="stylesheet" href="style.css?v=15">
 <script>
   // Activa el aislamiento entre orígenes (necesario para usar varios hilos) mediante el service worker.
   if ('serviceWorker' in navigator) {
@@ -41,6 +41,7 @@
     <button role="tab" data-mode="text" class="sel" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg><span class="lbl">Texto</span></button>
     <button role="tab" data-mode="doc" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span class="lbl">Documentos</span></button>
     <button role="tab" data-mode="cam" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 15.5l-4.5-4.5-8.5 8.5"/></svg><span class="lbl">Imágenes</span></button>
+    <button role="tab" data-mode="talk" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h8A1.5 1.5 0 0 1 15 5.5v5a1.5 1.5 0 0 1-1.5 1.5H9l-3 2.5V12h-.5A1.5 1.5 0 0 1 4 10.5z"/><path d="M18 9h.5A1.5 1.5 0 0 1 20 10.5v5a1.5 1.5 0 0 1-1.5 1.5H18v2.5L15 17h-4.5A1.5 1.5 0 0 1 9 15.5V15"/></svg><span class="lbl">Conversación</span></button>
   </nav>
   <div class="top-actions">
     <button class="install-btn" id="installBtn" aria-label="Instalar app" hidden><svg viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg><span class="lbl">Instalar</span></button>
@@ -168,6 +169,31 @@
     </div>
   </section>
 
+  <section class="talk" id="talkPane" hidden>
+    <div class="talk-list" id="talkList" aria-live="polite">
+      <div class="talk-empty" id="talkEmpty">
+        <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h8A1.5 1.5 0 0 1 15 5.5v5a1.5 1.5 0 0 1-1.5 1.5H9l-3 2.5V12h-.5A1.5 1.5 0 0 1 4 10.5z"/><path d="M18 9h.5A1.5 1.5 0 0 1 20 10.5v5a1.5 1.5 0 0 1-1.5 1.5H18v2.5L15 17h-4.5A1.5 1.5 0 0 1 9 15.5V15"/></svg></div>
+        <strong>Habla y te traduzco</strong>
+        <span>Cada persona toca el micrófono de su idioma. La traducción aparece aquí y se escucha en voz alta.</span>
+        <span class="tiny" id="talkNote">La traducción se hace en tu dispositivo. El dictado lo hace tu navegador.</span>
+      </div>
+    </div>
+    <div class="talk-bar">
+      <div class="talk-side">
+        <button class="talk-mic" id="talkMicA" data-side="a" aria-label="Hablar"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+        <button class="talk-lang" id="talkLangA" data-side="a" aria-haspopup="dialog"><span></span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+      </div>
+      <div class="talk-mid">
+        <button class="icon-btn" id="talkVoiceBtn" data-tip="Voz activada" aria-label="Leer en voz alta" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="off-icon" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zM17 9.5l5 5M22 9.5l-5 5"/></svg></button>
+        <button class="icon-btn" id="talkClearBtn" data-tip="Nueva conversación" aria-label="Nueva conversación" disabled><svg viewBox="0 0 24 24"><path d="M5 7h14M10 11v6M14 11v6M6.5 7l1 12a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-12M9.5 7V4.5h5V7"/></svg></button>
+      </div>
+      <div class="talk-side">
+        <button class="talk-mic" id="talkMicB" data-side="b" aria-label="Hablar"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+        <button class="talk-lang" id="talkLangB" data-side="b" aria-haspopup="dialog"><span></span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+      </div>
+    </div>
+  </section>
+
   <p class="foot-note">Funciona con <a href="https://github.com/Tencent-Hunyuan/Hy-MT2" target="_blank" rel="noopener">Hy-MT2 1.8B</a> de Tencent, dentro de tu navegador. Nada de lo que escribes sale de tu dispositivo.</p>
 </main>
 <div class="ios-hint" id="iosHint" hidden>
@@ -218,6 +244,6 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<script type="module" src="app.js?v=14"></script>
+<script type="module" src="app.js?v=15"></script>
 </body>
 </html>
