@@ -730,7 +730,6 @@ function talkRender() {
   tel.voice.setAttribute('aria-pressed', String(talk.voice));
   tel.voice.dataset.tip = talk.voice ? 'Voz activada' : 'Voz desactivada';
   tel.laya.setAttribute('aria-pressed', String(talk.laya));
-  tel.laya.classList.toggle('loading', talk.layaLoading);
   tel.laya.dataset.tip = talk.laya ? 'Fin de turno con IA (Laya)' : 'Fin de turno por silencio';
   tel.mic.classList.toggle('on', talk.on && talk.sttReady);
   tel.mic.classList.toggle('wait', talk.on && !talk.sttReady);
@@ -750,7 +749,7 @@ function earWorker() {
   ear.onmessage = ({ data: m }) => {
     if (m.type === 'progress') {
       if (m.kind === 'stt' && talk.on && !talk.sttReady) tSay(`Preparando el oído… ${m.pct}%`, true);
-      if (m.kind === 'laya' && talk.layaLoading && talk.sttReady && !cur) tSay(`Descargando Laya… ${m.pct}%`, true);
+      if (m.kind === 'laya' && talk.layaLoading) { layaRing(m.pct); if (talk.sttReady && talk.on && !cur) tSay(`Descargando Laya… ${m.pct}%`, true); }
       return;
     }
     const w = earWait.get(m.id); if (!w) return;
@@ -770,15 +769,35 @@ function earCall(msg, queued = true) {
   const p = earQ.then(run, run); earQ = p.catch(() => {}); return p;
 }
 
+// Anillo del botón: null = arrancando (gira), 0-100 = progreso real, 'done' = listo, false = oculto.
+let ringTimer = 0;
+function layaRing(v) {
+  const b = tel.laya; clearTimeout(ringTimer);
+  if (v === false) { b.classList.remove('is-loading', 'is-indet', 'is-done'); b.style.setProperty('--p', 0); b.removeAttribute('aria-busy'); return; }
+  if (v === 'done') {
+    b.style.setProperty('--p', 100); b.classList.remove('is-indet');
+    requestAnimationFrame(() => { b.classList.add('is-done'); b.classList.remove('is-loading'); });
+    haptic(12); b.removeAttribute('aria-busy');
+    ringTimer = setTimeout(() => { b.classList.remove('is-done'); b.style.setProperty('--p', 0); }, 900);
+    b.setAttribute('aria-label', 'Detectar el fin de turno con IA (Laya)');
+    return;
+  }
+  b.classList.remove('is-done'); b.classList.add('is-loading'); b.setAttribute('aria-busy', 'true');
+  if (v == null) { b.classList.add('is-indet'); b.setAttribute('aria-label', 'Preparando Laya'); return; }
+  b.classList.remove('is-indet');
+  // Nunca retrocede: varios archivos informan por separado.
+  const p = Math.max(Number(b.style.getPropertyValue('--p')) || 0, v);
+  b.style.setProperty('--p', p); b.setAttribute('aria-label', `Descargando Laya, ${p}%`);
+}
 async function loadLaya() {
   if (talk.layaReady || talk.layaLoading) return;
-  talk.layaLoading = true; talkRender();
+  talk.layaLoading = true; talkRender(); layaRing(null);
   try {
     await earCall({ type: 'load-laya' }, false);
-    talk.layaReady = true; store.set('layaDl', true);
+    talk.layaReady = true; store.set('layaDl', true); layaRing('done');
     if (talk.on && !cur) idleStatus();
   } catch (e) {
-    console.warn('Laya', e); talk.laya = false; store.set('talkLaya', false);
+    console.warn('Laya', e); talk.laya = false; store.set('talkLaya', false); layaRing(false);
     toast(/nogpu/.test(e.message) ? 'Laya necesita WebGPU y tu navegador no lo tiene' : 'No pude cargar Laya. Sigo usando el silencio.');
   }
   talk.layaLoading = false; talkRender();
