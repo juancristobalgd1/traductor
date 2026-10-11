@@ -164,6 +164,21 @@ class Confidence extends LogitsProcessor {
     return logits;
   }
 }
+/* Detección de idioma en la misma pasada: en la posición del token de idioma solo dejo
+   los dos idiomas de la conversación (con un pequeño empujón al que toca por turno),
+   y después fuerzo <|transcribe|><|notimestamps|>. Sin pasada extra del codificador. */
+const BIAS = 1.0;
+class LangPick extends LogitsProcessor {
+  constructor(at, ids, prefer, tr, nt) { super(); Object.assign(this, { at, ids, prefer, tr, nt }); }
+  _call(seq, logits) {
+    const n = seq[0].length, V = logits.dims.at(-1), d = logits.data.subarray(logits.data.length - V);
+    const only = (keep) => { const v = keep.map(i => d[i]); d.fill(-Infinity); keep.forEach((i, k) => { d[i] = v[k]; }); };
+    if (n === this.at) { only(this.ids); if (this.prefer != null) d[this.prefer] += BIAS; }
+    else if (n === this.at + 1) { d.fill(-Infinity); d[this.tr] = 0; }
+    else if (n === this.at + 2) { d.fill(-Infinity); d[this.nt] = 0; }
+    return logits;
+  }
+}
 async function ratio(text) {                // Compresión alta = frase repetitiva (bucle de Whisper).
   if (text.length < 24 || typeof CompressionStream === 'undefined') return 1;
   const b = new TextEncoder().encode(text);
@@ -171,45 +186,71 @@ async function ratio(text) {                // Compresión alta = frase repetiti
   return b.length / Math.max(1, z.byteLength - 18);
 }
 
-async function transcribe({ audio, langs, lang, prompt }) {
+async function transcribe({ audio, langs, lang, prompt, expect, prompts }) {
   const s = await loadStt();
   let speech = audio;
   try { speech = await speechOnly(audio); } catch (e) { console.warn('VAD', e); speech = audio; }
   if (!speech) return { text: '', lang: lang || langs[0], model: s.id, gpu: s.gpu, vad: 'silence' };
   const { input_features } = await s.processor(speech);
-  const use = lang || (langs[0] === langs[1] ? langs[0] : await detect(s, input_features, langs));
   const secs = speech.length / 16000;
-  const run = async (ctx, temperature = 0) => {
+  const sot = tid(s.tok, '<|startoftranscript|>'), prev = tid(s.tok, '<|startofprev|>');
+  const tr = tid(s.tok, '<|transcribe|>'), nt = tid(s.tok, '<|notimestamps|>');
+  const two = !lang && langs[0] !== langs[1];
+  const lids = two ? langs.map(c => langId(s.tok, c)) : [];
+  const canPick = two && lids.every(x => x != null) && [sot, tr, nt].every(x => x != null);
+  let use = lang || (two ? null : langs[0]);
+  if (two && !canPick) use = await detect(s, input_features, langs);
+  const ctxFor = l => (prompts && l in prompts ? prompts[l] : prompt);
+  // pick = true: detecta entre los dos idiomas en la misma pasada en la que transcribe.
+  const run = async (ctx, temperature = 0, pick = false) => {
+    const want = pick ? (expect || langs[0]) : use;
     const gen = {
-      inputs: input_features, language: use, task: 'transcribe',
+      inputs: input_features, language: want, task: 'transcribe',
       max_new_tokens: Math.min(220, 20 + Math.ceil(secs * 8)),
       no_repeat_ngram_size: 4,
     };
     if (temperature > 0) Object.assign(gen, { do_sample: true, temperature, top_k: 0 });
     // Contexto: lo último que se dijo en la conversación, en este mismo idioma (como el
     // "initial prompt" de Whisper). Ayuda con nombres, lugares y palabras sueltas.
-    const sot = tid(s.tok, '<|startoftranscript|>');
-    if (ctx) {
-      const prev = tid(s.tok, '<|startofprev|>'), li = langId(s.tok, use);
-      const tr = tid(s.tok, '<|transcribe|>'), nt = tid(s.tok, '<|notimestamps|>');
-      const p = Array.from(s.tok.encode(' ' + ctx.trim(), { add_special_tokens: false }), Number).slice(-80);
-      if ([prev, sot, li, tr, nt].every(x => x != null) && p.length) gen.decoder_input_ids = [prev, ...p, sot, li, tr, nt];
+    const p = ctx && prev != null ? Array.from(s.tok.encode(' ' + ctx.trim(), { add_special_tokens: false }), Number).slice(-80) : [];
+    const head = p.length ? [prev, ...p, sot] : [sot];
+    let skip;
+    if (pick) { gen.decoder_input_ids = head; skip = head.length + 3; }
+    else {
+      const li = langId(s.tok, use);
+      if (p.length && [sot, li, tr, nt].every(x => x != null)) gen.decoder_input_ids = [...head, li, tr, nt];
+      skip = gen.decoder_input_ids?.length ?? 4;
     }
-    const init = gen.decoder_input_ids?.length ?? 4;
-    const conf = new Confidence(init);
-    gen.logits_processor = new LogitsProcessorList(); gen.logits_processor.push(conf);
+    const conf = new Confidence(skip);
+    gen.logits_processor = new LogitsProcessorList();
+    if (pick) gen.logits_processor.push(new LangPick(head.length, lids, langId(s.tok, want), tr, nt));
+    gen.logits_processor.push(conf);
     let ids;
     try { ids = (await s.model.generate(gen)).tolist()[0].map(Number); }
-    catch (e) { if (temperature > 0) throw e; delete gen.logits_processor; ids = (await s.model.generate(gen)).tolist()[0].map(Number); conf.lp = []; }
+    catch (e) {
+      if (temperature > 0 || pick) throw e;
+      delete gen.logits_processor; ids = (await s.model.generate(gen)).tolist()[0].map(Number); conf.lp = [];
+    }
     conf.take(ids.at(-1));
-    const body = gen.decoder_input_ids ? ids.slice(gen.decoder_input_ids.length) : ids;
+    const got = pick ? langs[lids.indexOf(ids[head.length])] ?? want : use;
+    const body = gen.decoder_input_ids ? ids.slice(skip) : ids;
     const text = (s.tok.decode(body, { skip_special_tokens: true }) || '').replace(/\s+/g, ' ').trim();
     const logp = conf.lp.length ? conf.lp.reduce((a, b) => a + b, 0) / conf.lp.length : 0;
     const cr = await ratio(text);
-    return { text, logp, cr, t: temperature, ok: cr <= 2.4 && logp >= -1 };
+    return { text, logp, cr, t: temperature, lang: got, ok: cr <= 2.4 && logp >= -1 };
   };
   const norm = t => t.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').trim();
-  let best = await run(prompt);
+  let best;
+  if (canPick) {
+    try {
+      best = await run(ctxFor(expect || langs[0]), 0, true);
+      use = best.lang;
+      // Si habló el otro idioma, el contexto que usé era del idioma equivocado: repito con el suyo.
+      if (use !== (expect || langs[0]) && (ctxFor(use) || ctxFor(expect || langs[0]))) best = await run(ctxFor(use));
+    } catch (e) { console.warn('detección', e); use = await detect(s, input_features, langs); best = null; }
+  }
+  if (!best) best = await run(ctxFor(use));
+  prompt = ctxFor(use);
   // Si con contexto repite lo anterior en vez de escuchar, se repite sin contexto.
   if (prompt && best.text && norm(prompt).includes(norm(best.text))) best = await run(null);
   // Como el Whisper original: si la frase sale dudosa o en bucle, se reintenta con más
@@ -221,7 +262,7 @@ async function transcribe({ audio, langs, lang, prompt }) {
       if (best.ok) break;
     }
   }
-  console.log('stt', JSON.stringify({ text: best.text, logp: +best.logp.toFixed(2), cr: +best.cr.toFixed(2), t: best.t, secs: +secs.toFixed(1), raw: +(audio.length / 16000).toFixed(1) }));
+  console.log('stt', JSON.stringify({ lang: use, expect: expect || null, text: best.text, logp: +best.logp.toFixed(2), cr: +best.cr.toFixed(2), t: best.t, secs: +secs.toFixed(1), raw: +(audio.length / 16000).toFixed(1) }));
   let text = best.text;
   // Alucinaciones típicas de Whisper con ruido o silencio.
   if (/^(\[.*\]|\(.*\)|♪+|\.+|subt[ií]tulos.*|thanks? (you )?for watching.*|gracias\.?)$/i.test(text) && secs < 1.2) text = '';

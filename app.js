@@ -789,7 +789,7 @@ let ear = null, earId = 0, earQ = Promise.resolve();
 const earWait = new Map();
 function earWorker() {
   if (ear) return ear;
-  ear = new Worker('./listen.js?v=27', { type: 'module' });
+  ear = new Worker('./listen.js?v=29', { type: 'module' });
   ear.onmessage = ({ data: m }) => {
     if (m.type === 'progress') {
       if (m.kind === 'stt' && talk.on && !talk.sttReady) {
@@ -1022,7 +1022,9 @@ function closeTurn() {
   const audio = cleanAudio(concat(t.frames));
   const el = t.el, said = el.querySelector('.said'), heard = el.querySelector('.heard');
   // Por turnos: quien habla ahora es quien marca el idioma (sin adivinar, más rápido y preciso).
-  const side = nat.side, forced = wcode(talk[side]);
+  // Quien toca por turno es solo una pista: Whisper decide entre los dos idiomas.
+  const expected = nat.side, forced = wcode(talk[expected]);
+  const both = wcode(talk.a) !== wcode(talk.b);
   // Por turnos de verdad: no escucho a nadie hasta que la traducción se haya leído en voz alta;
   // solo entonces le toca a la otra persona.
   hold(true); tSay('Traduciendo…', true);
@@ -1032,10 +1034,13 @@ function closeTurn() {
     try {
     // Contexto para Whisper: las dos últimas frases de la conversación en el idioma de quien habla
     // (lo que dijo antes y la traducción de lo que le acaban de decir).
-    const src = talk[side], prompt = talk.ctx.filter(c => c.lang === src).slice(-2).map(c => c.text).join(' ').slice(-220);
-    try { res = await earCall({ type: 'stt', audio, langs: langs(), lang: forced, prompt }); }
+    const ctxOf = code => talk.ctx.filter(c => c.lang === code).slice(-2).map(c => c.text).join(' ').slice(-220);
+    const prompts = { [wcode(talk.a)]: ctxOf(talk.a), [wcode(talk.b)]: ctxOf(talk.b) };
+    try { res = await earCall({ type: 'stt', audio, langs: langs(), lang: both ? null : forced, expect: forced, prompts, prompt: ctxOf(talk[expected]) }); }
     catch (e) { console.error(e); dropTurn(el); toast('No pude entender el audio'); return; }
     if (!res.text) return dropTurn(el);
+    const side = both && res.lang === wcode(talk[otherSide(expected)]) ? otherSide(expected) : expected;
+    const src = talk[side];
     spoke = await translateTurn(el, res.text, side);
     const tgt = talk[otherSide(side)], heardTxt = el.querySelector('.heard')?.textContent.trim();
     talk.ctx.push({ lang: src, text: res.text });
@@ -1043,7 +1048,7 @@ function closeTurn() {
     talk.ctx = talk.ctx.slice(-8);
     if (spoke) { tSay('Leyendo la traducción…', true); await ttsDone(); }
     // Solo cambio de turno si se tradujo algo y nadie tocó otro idioma mientras tanto.
-    if (heardTxt && nat.side === side) nat.side = otherSide(side);
+    if (heardTxt && nat.side === expected) nat.side = otherSide(side);
     } finally {
       hold(false);
       if (talk.on && !cur) idleStatus();
@@ -1142,7 +1147,9 @@ const otherSide = s => (s === 'a' ? 'b' : 'a');
 function natSpeaker() {
   tel.langA.classList.toggle('now', talk.on && nat.side === 'a');
   tel.langB.classList.toggle('now', talk.on && nat.side === 'b');
-  if (talk.on && !nat.busy) tSay(`Habla en ${L[talk[nat.side]].name.toLowerCase()} · toca el otro idioma si le toca a la otra persona`, true);
+  if (!talk.on || nat.busy) return;
+  if (!useNative()) return tSay(`Hablad en ${L[talk.a].name.toLowerCase()} o ${L[talk.b].name.toLowerCase()} · lo detecto solo`, true);
+  tSay(`Habla en ${L[talk[nat.side]].name.toLowerCase()} · toca el otro idioma si le toca a la otra persona`, true);
 }
 function natBeat(on) {
   clearInterval(nat.beat); nat.beat = 0;
