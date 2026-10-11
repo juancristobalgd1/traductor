@@ -949,6 +949,33 @@ function onFrame(f) {
     if (cur.p >= bar && quiet >= confirm) closeTurn();
   }
 }
+// Limpieza antes de Whisper: quita zumbido grave y desfase, recorta silencios y nivela el volumen.
+function cleanAudio(x) {
+  const n = x.length; if (!n) return x;
+  // 1) Desfase (DC) y filtro paso alto ~80 Hz: fuera ruido de motor, aire acondicionado, golpes en la mesa.
+  let mean = 0; for (let i = 0; i < n; i++) mean += x[i]; mean /= n;
+  const y = new Float32Array(n), rc = 1 / (2 * Math.PI * 80), dt = 1 / SR, al = rc / (rc + dt);
+  let px = 0, py = 0;
+  for (let i = 0; i < n; i++) { const v = x[i] - mean; py = al * (py + v - px); px = v; y[i] = py; }
+  // 2) Recorte de silencios al principio y al final (deja 250 ms de margen).
+  const W = 320, fr = Math.floor(n / W); if (fr < 3) return y;
+  const rms = new Float32Array(fr); let top = 0;
+  for (let f = 0; f < fr; f++) { let s = 0; for (let k = f * W; k < (f + 1) * W; k++) s += y[k] * y[k]; rms[f] = Math.sqrt(s / W); if (rms[f] > top) top = rms[f]; }
+  const thr = Math.max(top * 0.08, 0.004);
+  let a0 = 0, a1 = fr - 1; while (a0 < fr && rms[a0] < thr) a0++; while (a1 > a0 && rms[a1] < thr) a1--;
+  if (a0 >= fr) return y;
+  const pad = Math.round(0.25 * SR / W);
+  const s0 = Math.max(0, (a0 - pad) * W), s1 = Math.min(n, (a1 + 1 + pad) * W);
+  const z = y.slice(s0, s1);
+  // 3) Volumen: lleva la voz a un nivel cómodo (sin pasarse) y suaviza picos.
+  let sum = 0, cnt = 0, pk = 0;
+  for (let f = a0; f <= a1; f++) if (rms[f] >= thr) { sum += rms[f] * rms[f]; cnt++; }
+  for (let i = 0; i < z.length; i++) { const v = Math.abs(z[i]); if (v > pk) pk = v; }
+  const level = Math.sqrt(sum / Math.max(1, cnt)) || 1e-4;
+  const g = Math.min(10, 0.1 / level, 0.98 / Math.max(pk, 1e-4) * 1.6);
+  for (let i = 0; i < z.length; i++) { const v = z[i] * g; z[i] = v > 0.8 || v < -0.8 ? Math.tanh(v) : v; }
+  return z;
+}
 const concat = frames => { const a = new Float32Array(frames.length * FRAME); frames.forEach((f, i) => a.set(f, i * FRAME)); return a; };
 function langs() { return [wcode(talk.a), wcode(talk.b)]; }
 
@@ -961,7 +988,7 @@ function openTurn(now) {
 async function judgeTurn(t, quiet) {
   t.judging = true; t.judgedAt = t.lastLoud;
   try {
-    const part = await earCall({ type: 'stt', audio: concat(t.frames), langs: langs(), lang: t.lang });
+    const part = await earCall({ type: 'stt', audio: cleanAudio(concat(t.frames)), langs: langs(), lang: t.lang });
     if (t !== cur) return;
     t.lang = t.lang || part.lang;
     if (part.text) t.el.querySelector('.said').textContent = part.text;
@@ -980,7 +1007,7 @@ function closeTurn() {
   const t = cur; cur = null;
   if (talk.on) idleStatus();
   if (t.voiced < 250) return dropTurn(t.el);
-  const audio = concat(t.frames);
+  const audio = cleanAudio(concat(t.frames));
   const el = t.el, said = el.querySelector('.said'), heard = el.querySelector('.heard');
   // Por turnos: quien habla ahora es quien marca el idioma (sin adivinar, más rápido y preciso).
   const side = nat.side, forced = wcode(talk[side]);
