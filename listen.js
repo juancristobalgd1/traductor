@@ -107,17 +107,34 @@ async function detect(s, features, langs) {
   }
 }
 
-async function transcribe({ audio, langs, lang }) {
+async function transcribe({ audio, langs, lang, prompt }) {
   const s = await loadStt();
   const { input_features } = await s.processor(audio);
   const use = lang || (langs[0] === langs[1] ? langs[0] : await detect(s, input_features, langs));
-  const out = await s.model.generate({
-    inputs: input_features, language: use, task: 'transcribe',
-    max_new_tokens: Math.min(220, 20 + Math.ceil(audio.length / 16000 * 8)),
-    no_repeat_ngram_size: 4,
-  });
-  let text = s.tok.batch_decode(out, { skip_special_tokens: true })[0] || '';
-  text = text.replace(/\s+/g, ' ').trim();
+  const run = async (ctx) => {
+    const gen = {
+      inputs: input_features, language: use, task: 'transcribe',
+      max_new_tokens: Math.min(220, 20 + Math.ceil(audio.length / 16000 * 8)),
+      no_repeat_ngram_size: 4,
+    };
+    // Contexto: lo último que se dijo en la conversación, en este mismo idioma (como el
+    // "initial prompt" de Whisper). Ayuda con nombres, lugares y palabras sueltas.
+    const sot = tid(s.tok, '<|startoftranscript|>');
+    if (ctx) {
+      const prev = tid(s.tok, '<|startofprev|>'), li = langId(s.tok, use);
+      const tr = tid(s.tok, '<|transcribe|>'), nt = tid(s.tok, '<|notimestamps|>');
+      const p = Array.from(s.tok.encode(' ' + ctx.trim(), { add_special_tokens: false }), Number).slice(-80);
+      if ([prev, sot, li, tr, nt].every(x => x != null) && p.length) gen.decoder_input_ids = [prev, ...p, sot, li, tr, nt];
+    }
+    const out = await s.model.generate(gen);
+    let ids = out.tolist()[0].map(Number);
+    if (gen.decoder_input_ids) ids = ids.slice(gen.decoder_input_ids.length);
+    return (s.tok.decode(ids, { skip_special_tokens: true }) || '').replace(/\s+/g, ' ').trim();
+  };
+  let text = await run(prompt);
+  // Si con contexto repite lo anterior en vez de escuchar, se repite sin contexto.
+  const norm = t => t.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').trim();
+  if (prompt && text && norm(prompt).includes(norm(text))) text = await run(null);
   // Alucinaciones típicas de Whisper con ruido o silencio.
   if (/^(\[.*\]|\(.*\)|♪+|\.+|subt[ií]tulos.*|thanks? (you )?for watching.*|gracias\.?)$/i.test(text) && audio.length < 16000 * 1.2) text = '';
   return { text, lang: use, model: s.id, gpu: s.gpu };

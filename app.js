@@ -740,7 +740,7 @@ const talk = {
   a: talkSaved?.a && L[talkSaved.a] ? talkSaved.a : (state.src !== 'auto' && L[state.src] ? state.src : L[browserLang] ? browserLang : 'es'),
   b: talkSaved?.b && L[talkSaved.b] ? talkSaved.b : state.tgt,
   voice: store.get('talkVoice', true), laya: store.get('talkLaya', false) && !!navigator.gpu,
-  on: false, sttReady: false, layaReady: false, layaLoading: false, busy: Promise.resolve(), last: null,
+  on: false, sttReady: false, layaReady: false, layaLoading: false, busy: Promise.resolve(), last: null, ctx: [],
 };
 if (talk.a === talk.b) talk.b = talk.a === 'en' ? 'es' : 'en';
 const T = id => document.getElementById(id);
@@ -783,7 +783,7 @@ let ear = null, earId = 0, earQ = Promise.resolve();
 const earWait = new Map();
 function earWorker() {
   if (ear) return ear;
-  ear = new Worker('./listen.js?v=23', { type: 'module' });
+  ear = new Worker('./listen.js?v=26', { type: 'module' });
   ear.onmessage = ({ data: m }) => {
     if (m.type === 'progress') {
       if (m.kind === 'stt' && talk.on && !talk.sttReady) {
@@ -1015,10 +1015,17 @@ function closeTurn() {
   el.querySelector('.said').textContent = '';
   talk.busy = talk.busy.then(async () => {
     let res;
-    try { res = await earCall({ type: 'stt', audio, langs: langs(), lang: forced }); }
+    // Contexto para Whisper: las dos últimas frases de la conversación en el idioma de quien habla
+    // (lo que dijo antes y la traducción de lo que le acaban de decir).
+    const src = talk[side], prompt = talk.ctx.filter(c => c.lang === src).slice(-2).map(c => c.text).join(' ').slice(-220);
+    try { res = await earCall({ type: 'stt', audio, langs: langs(), lang: forced, prompt }); }
     catch (e) { console.error(e); dropTurn(el); toast('No pude entender el audio'); return; }
     if (!res.text) return dropTurn(el);
     await translateTurn(el, res.text, side);
+    const tgt = talk[otherSide(side)], heardTxt = el.querySelector('.heard')?.textContent.trim();
+    talk.ctx.push({ lang: src, text: res.text });
+    if (heardTxt) talk.ctx.push({ lang: tgt, text: heardTxt });
+    talk.ctx = talk.ctx.slice(-8);
     if (talk.on && !cur) idleStatus();
   });
 }
@@ -1248,7 +1255,7 @@ tel.clear.addEventListener('click', () => {
   speechSynthesis?.cancel?.();
   if (cur) { cur = null; }
   tel.list.querySelectorAll('.turn').forEach(t => t.remove());
-  talk.last = null; tel.empty.hidden = false; tel.clear.disabled = true; haptic();
+  talk.last = null; talk.ctx = []; tel.empty.hidden = false; tel.clear.disabled = true; haptic();
   if (talk.on) idleStatus();
 });
 talkRender();
