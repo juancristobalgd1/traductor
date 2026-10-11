@@ -682,8 +682,10 @@ function speak(text, code) {
   if (!('speechSynthesis' in window) || !text) return;
   const btn = arguments[2];
   if (btn?.classList.contains('speaking')) { speechSynthesis.cancel(); return; }
-  speechSynthesis.cancel();
+  const busy = speechSynthesis.speaking || speechSynthesis.pending;
+  if (busy) speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text);
+  speak.u = u;   // Chrome pierde la frase si nadie guarda la referencia
   for (const b of [els.speakSrc, els.speakOut]) b.classList.remove('speaking');
   if (btn) { btn.classList.add('speaking'); u.onend = u.onerror = () => btn.classList.remove('speaking'); }
   const tag = L[code]?.speech || code || '';
@@ -691,7 +693,11 @@ function speak(text, code) {
   const v = speechSynthesis.getVoices().find(v => v.lang.toLowerCase() === tag.toLowerCase())
     || speechSynthesis.getVoices().find(v => v.lang.toLowerCase().startsWith((code || '').slice(0, 2)));
   if (v) u.voice = v; else if (code) toast('Tu dispositivo puede no tener voz para este idioma');
-  speechSynthesis.speak(u);
+  const prevErr = u.onerror;
+  u.onerror = e => { prevErr?.(e); if (e?.error && e.error !== 'interrupted' && e.error !== 'canceled') toast('No pude leer la traducción en voz alta'); };
+  const go = () => { try { speechSynthesis.resume(); } catch {} speechSynthesis.speak(u); };
+  // Hablar justo después de cancelar hace que Chrome se trague la frase: espero un instante.
+  busy ? setTimeout(go, 80) : go();
 }
 els.speakSrc.addEventListener('click', () => speak(els.src.value, state.src === 'auto' ? state.detected : state.src, els.speakSrc));
 els.speakOut.addEventListener('click', () => speak(state.output, state.tgt, els.speakOut));
@@ -922,7 +928,8 @@ function onFrame(f) {
   // Mientras el móvil habla (la traducción en voz alta), no escucho: evita oírse a sí mismo.
   const speaking = window.speechSynthesis?.speaking;
   if (speaking) gate.mute = now + 350;
-  if (!talk.sttReady || speaking || now < gate.mute) { gate.ring.length = 0; gate.streak = 0; return; }
+  const held = talk.hold && now < talk.holdUntil;
+  if (!talk.sttReady || speaking || held || now < gate.mute) { gate.ring.length = 0; gate.streak = 0; return; }
   if (!cur) {
     // El suelo de ruido solo se ajusta cuando nadie habla: baja rápido, sube despacio.
     gate.floor = Math.max(0.0015, rms < gate.floor ? gate.floor * 0.9 + rms * 0.1 : gate.floor * 0.995 + rms * 0.005);
@@ -1003,6 +1010,11 @@ function dropTurn(el) {
   el.remove();
   if (!tel.list.querySelector('.turn')) { tel.empty.hidden = false; tel.clear.disabled = true; }
 }
+function hold(on) {
+  talk.hold = on; talk.holdUntil = on ? performance.now() + 60000 : 0;
+  nat.busy = on; gate.ring.length = 0; gate.streak = 0;
+  if (!on) gate.mute = performance.now() + 400;   // un respiro para que el eco del altavoz se apague
+}
 function closeTurn() {
   const t = cur; cur = null;
   if (talk.on) idleStatus();
@@ -1011,22 +1023,31 @@ function closeTurn() {
   const el = t.el, said = el.querySelector('.said'), heard = el.querySelector('.heard');
   // Por turnos: quien habla ahora es quien marca el idioma (sin adivinar, más rápido y preciso).
   const side = nat.side, forced = wcode(talk[side]);
-  nat.side = otherSide(side); natSpeaker();
+  // Por turnos de verdad: no escucho a nadie hasta que la traducción se haya leído en voz alta;
+  // solo entonces le toca a la otra persona.
+  hold(true); tSay('Traduciendo…', true);
   el.querySelector('.said').textContent = '';
   talk.busy = talk.busy.then(async () => {
-    let res;
+    let res, spoke = false;
+    try {
     // Contexto para Whisper: las dos últimas frases de la conversación en el idioma de quien habla
     // (lo que dijo antes y la traducción de lo que le acaban de decir).
     const src = talk[side], prompt = talk.ctx.filter(c => c.lang === src).slice(-2).map(c => c.text).join(' ').slice(-220);
     try { res = await earCall({ type: 'stt', audio, langs: langs(), lang: forced, prompt }); }
     catch (e) { console.error(e); dropTurn(el); toast('No pude entender el audio'); return; }
     if (!res.text) return dropTurn(el);
-    await translateTurn(el, res.text, side);
+    spoke = await translateTurn(el, res.text, side);
     const tgt = talk[otherSide(side)], heardTxt = el.querySelector('.heard')?.textContent.trim();
     talk.ctx.push({ lang: src, text: res.text });
     if (heardTxt) talk.ctx.push({ lang: tgt, text: heardTxt });
     talk.ctx = talk.ctx.slice(-8);
-    if (talk.on && !cur) idleStatus();
+    if (spoke) { tSay('Leyendo la traducción…', true); await ttsDone(); }
+    // Solo cambio de turno si se tradujo algo y nadie tocó otro idioma mientras tanto.
+    if (heardTxt && nat.side === side) nat.side = otherSide(side);
+    } finally {
+      hold(false);
+      if (talk.on && !cur) idleStatus();
+    }
   });
 }
 
