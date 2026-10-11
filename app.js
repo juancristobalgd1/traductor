@@ -752,7 +752,8 @@ const wcode = c => (c in WHISPER ? WHISPER[c] : c);
 
 function tSay(text, live = false) { tel.status.textContent = text; tel.status.classList.toggle('live', live); }
 function idleStatus() {
-  if (!talk.on) return tSay(talk.sttReady ? 'Toca el micrófono para empezar' : 'Toca para empezar · 80 MB la primera vez');
+  if (!talk.on) return tSay(talk.sttReady || useNative() ? 'Toca el micrófono para empezar' : 'Toca para empezar · 80 MB la primera vez');
+  if (useNative()) return natSpeaker();
   tSay(talk.laya && talk.layaReady ? 'Escuchando · Laya decide cuándo terminas' : 'Escuchando · hablad por turnos');
 }
 function setTalkLabel(btn, name) {
@@ -765,6 +766,7 @@ function talkRender() {
   setTalkLabel(tel.langB, L[talk.b].name);
   tel.voice.setAttribute('aria-pressed', String(talk.voice));
   tel.voice.dataset.tip = talk.voice ? 'Voz activada' : 'Voz desactivada';
+  tel.laya.hidden = useNative();
   tel.laya.setAttribute('aria-pressed', String(talk.laya));
   tel.laya.dataset.tip = talk.laya ? 'Fin de turno con IA (Laya)' : 'Fin de turno por silencio';
   tel.mic.classList.toggle('on', talk.on && talk.sttReady);
@@ -985,21 +987,7 @@ function closeTurn() {
     // Si los dos idiomas suenan igual para Whisper (chino simplificado/tradicional), alterno.
     const side = wa === wb ? (talk.lastSide === 'a' ? 'b' : 'a') : res.lang === wa ? 'a' : 'b';
     talk.lastSide = side;
-    const src = talk[side], tgt = talk[side === 'a' ? 'b' : 'a'];
-    el.classList.remove('pending', 'live'); el.classList.add(side);
-    said.textContent = res.text; heard.classList.add('wait');
-    const play = el.querySelector('.play');
-    play.onclick = () => speak(heard.textContent, tgt, play);
-    scrollEnd();
-    try {
-      if (!state.ready) { tSay('Esperando al traductor…', true); await whenReady(); }
-      const out = await translateOne(res.text, src, tgt, partial => { heard.classList.remove('wait'); heard.textContent = partial; });
-      heard.classList.remove('wait'); heard.textContent = out; talk.last = out;
-      scrollEnd();
-      if (talk.voice && out) speak(out, tgt, play);
-    } catch (err) {
-      console.error(err); heard.classList.remove('wait'); heard.textContent = ''; toast('Algo falló al traducir. Prueba otra vez.');
-    }
+    await translateTurn(el, res.text, side);
     if (talk.on && !cur) idleStatus();
   });
 }
@@ -1041,11 +1029,126 @@ async function translateOne(text, src, tgt, onDelta) {
   return out;
 }
 
+/* Traduce un turno ya transcrito y lo lee en voz alta. Devuelve true si empezó a hablar. */
+async function translateTurn(el, text, side) {
+  const src = talk[side], tgt = talk[side === 'a' ? 'b' : 'a'];
+  const said = el.querySelector('.said'), heard = el.querySelector('.heard');
+  el.classList.remove('pending', 'live', 'a', 'b'); el.classList.add(side);
+  said.textContent = text; heard.textContent = ''; heard.classList.add('wait');
+  const play = el.querySelector('.play');
+  play.onclick = () => speak(heard.textContent, tgt, play);
+  scrollEnd();
+  try {
+    let out = await fastTranslate(text, src, tgt);
+    if (out == null) {
+      if (!state.ready) { tSay('Esperando al traductor…', true); await whenReady(); }
+      out = await translateOne(text, src, tgt, partial => { heard.classList.remove('wait'); heard.textContent = partial; });
+    }
+    heard.classList.remove('wait'); heard.textContent = out; talk.last = out;
+    scrollEnd();
+    if (talk.voice && out) { speak(out, tgt, play); return true; }
+  } catch (err) {
+    console.error(err); heard.classList.remove('wait'); heard.textContent = ''; toast('Algo falló al traducir. Prueba otra vez.');
+  }
+  return false;
+}
+/* Traductor integrado del navegador (Chrome de escritorio): instantáneo si ya tiene el par descargado. */
+const fastTr = new Map();
+async function fastTranslate(text, src, tgt) {
+  if (!('Translator' in self)) return null;
+  try {
+    const opt = { sourceLanguage: src, targetLanguage: tgt }, key = src + '>' + tgt;
+    if (!fastTr.has(key)) {
+      if ((await Translator.availability(opt)) !== 'available') return null;
+      fastTr.set(key, await Translator.create(opt));
+    }
+    return await fastTr.get(key).translate(text);
+  } catch { return null; }
+}
+const ttsDone = () => new Promise(res => {
+  const t0 = performance.now();
+  const poll = () => {
+    const s = window.speechSynthesis;
+    if (!s || (!s.speaking && !s.pending && performance.now() - t0 > 300) || performance.now() - t0 > 30000) return setTimeout(res, 250);
+    setTimeout(poll, 150);
+  };
+  setTimeout(poll, 150);
+});
+
+/* --- Reconocimiento de voz del propio móvil/navegador: rápido, preciso y con texto en vivo --- */
+const NATIVE = !!Rec && !/[?&]stt=whisper/.test(location.search);
+const nat = { rec: null, side: 'a', gen: 0, t: 0, beat: 0, busy: false };
+const otherSide = s => (s === 'a' ? 'b' : 'a');
+function natSpeaker() {
+  tel.langA.classList.toggle('now', talk.on && nat.side === 'a');
+  tel.langB.classList.toggle('now', talk.on && nat.side === 'b');
+  if (talk.on && !nat.busy) tSay(`Habla en ${L[talk[nat.side]].name.toLowerCase()} · toca el otro idioma si le toca a la otra persona`, true);
+}
+function natBeat(on) {
+  clearInterval(nat.beat); nat.beat = 0;
+  if (on) nat.beat = setInterval(() => micViz.push(0.32 + Math.random() * 0.5, true), 90);
+}
+function natListen() {
+  clearTimeout(nat.t);
+  if (!talk.on) return;
+  const gen = ++nat.gen, side = nat.side;
+  const r = new Rec(); nat.rec = r;
+  r.lang = L[talk[side]]?.speech || talk[side];
+  r.interimResults = true; r.continuous = false; r.maxAlternatives = 1;
+  let fin = '', shown = '', el = null, err = '';
+  natSpeaker();
+  r.onspeechstart = () => { if (gen === nat.gen) natBeat(true); };
+  r.onspeechend = () => natBeat(false);
+  r.onresult = ev => {
+    if (gen !== nat.gen) return;
+    let f = '', i2 = '';
+    for (let i = 0; i < ev.results.length; i++) { const t = ev.results[i][0].transcript; ev.results[i].isFinal ? (f += t) : (i2 += t); }
+    fin = f; shown = (f + i2).trim();
+    if (!shown) return;
+    micViz.push(0.75, true);
+    if (!el) { el = addTurn(side); tel.empty.hidden = true; }
+    el.querySelector('.said').textContent = shown;
+    scrollEnd();
+  };
+  r.onerror = ev => { err = ev.error; };
+  r.onend = async () => {
+    natBeat(false);
+    if (gen !== nat.gen) { if (el) dropTurn(el); return; }
+    nat.rec = null;
+    if (err === 'not-allowed' || err === 'service-not-allowed') { talkStop(); toast('Permite el micrófono para conversar'); return; }
+    if (err === 'language-not-supported') { talkStop(); toast(`Este navegador no reconoce la voz en ${L[talk[side]].name.toLowerCase()}`); return; }
+    if (err === 'network') { toast('El reconocimiento de voz necesita conexión. Paso al modo sin conexión.'); natFallback(); return; }
+    const text = (fin || shown).trim();
+    if (!text || !el) { if (el) dropTurn(el); nat.t = setTimeout(natListen, err === 'aborted' ? 400 : 60); return; }
+    // Turno cerrado: traduzco, lo leo y le toca a la otra persona.
+    nat.busy = true; nat.side = otherSide(side); natSpeaker();
+    tSay('Traduciendo…', true);
+    const spoke = await translateTurn(el, text, side);
+    if (spoke) { tSay('Leyendo la traducción…', true); await ttsDone(); }
+    nat.busy = false;
+    if (talk.on && gen === nat.gen) natListen();
+  };
+  try { r.start(); } catch (e) { console.warn(e); nat.t = setTimeout(natListen, 400); }
+}
+function natStop() {
+  nat.gen++; clearTimeout(nat.t); natBeat(false);
+  try { nat.rec?.abort(); } catch {}
+  nat.rec = null; nat.busy = false;
+  tel.langA.classList.remove('now'); tel.langB.classList.remove('now');
+}
+let natOff = false;
+function natFallback() { natOff = true; natStop(); talk.on = false; talkStart(); }
+const useNative = () => NATIVE && !natOff;
+
 async function talkStart() {
   if (!state.ready && !state.loading) { toast('Primero descarga el traductor'); setMode('text'); showCard(); return; }
-  const missing = [talk.a, talk.b].find(c => !wcode(c));
+  const missing = !useNative() && [talk.a, talk.b].find(c => !wcode(c));
   if (missing) { toast(`Aún no reconozco la voz en ${L[missing].name.toLowerCase()}`); return; }
   speechSynthesis?.cancel?.();
+  if (useNative()) {
+    talk.on = true; talk.sttReady = true; talkRender(); haptic(8);
+    natListen(); return;
+  }
   talk.on = true; talkRender();
   try { await micStart(); }
   catch (e) {
@@ -1064,14 +1167,23 @@ async function talkStart() {
 }
 function talkStop() {
   micViz.reset();
+  if (useNative() || nat.rec) { natStop(); talk.on = false; tel.status.classList.remove('live'); talkRender(); return; }
   if (cur) { if (cur.voiced >= 250) closeTurn(); else { dropTurn(cur.el); cur = null; } }
   micStop(); talk.on = false; tel.status.classList.remove('live'); talkRender();
 }
 window.talkStop = talkStop;
 
 tel.mic.addEventListener('click', () => (talk.on ? talkStop() : talkStart()));
-tel.langA.addEventListener('click', () => openPicker('ta'));
-tel.langB.addEventListener('click', () => openPicker('tb'));
+function pillTap(side) {
+  if (talk.on && useNative()) {
+    if (nat.side === side) { openPicker(side === 'a' ? 'ta' : 'tb'); return; }
+    haptic(8); nat.side = side; if (!nat.busy) { natStop(); talk.on = true; natListen(); } else natSpeaker();
+    return;
+  }
+  openPicker(side === 'a' ? 'ta' : 'tb');
+}
+tel.langA.addEventListener('click', () => pillTap('a'));
+tel.langB.addEventListener('click', () => pillTap('b'));
 tel.swap.addEventListener('click', () => {
   [talk.a, talk.b] = [talk.b, talk.a]; store.set('talk', { a: talk.a, b: talk.b }); haptic();
   tel.swap._r = (tel.swap._r || 0) + 180; tel.swap.style.setProperty('--r', tel.swap._r + 'deg');
@@ -1079,6 +1191,7 @@ tel.swap.addEventListener('click', () => {
   const row = tel.langA.parentElement; row.classList.remove('swapping'); void row.offsetWidth; row.classList.add('swapping');
   clearTimeout(row._t); row._t = setTimeout(() => row.classList.remove('swapping'), 450);
   talkRender();
+  if (talk.on && useNative() && !nat.busy) { natStop(); talk.on = true; natListen(); }
 });
 tel.voice.addEventListener('click', () => {
   talk.voice = !talk.voice; store.set('talkVoice', talk.voice); if (!talk.voice) speechSynthesis?.cancel?.();

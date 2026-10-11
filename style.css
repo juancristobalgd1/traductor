@@ -526,3 +526,10 @@ textarea:focus::placeholder{opacity:.55}
   .talk-mic .mic-halo,.talk-mic .mic-halo::after{animation:none!important;transform:scale(1.08)!important}
   .talk-langs.swapping span,.talk-lang span.chg{animation:none!important}
 }
+
+/* Conversación: el idioma de quien habla ahora queda marcado. */
+.talk-lang{position:relative}
+.talk-lang::after{content:"";position:absolute;left:50%;bottom:-3px;width:5px;height:5px;margin-left:-2.5px;border-radius:50%;background:var(--accent);opacity:0;transform:scale(0);transition:opacity .2s,transform .4s var(--soft-spring)}
+.talk-lang.now{color:var(--accent)}
+.talk-lang.now svg{color:var(--accent)}
+.talk-lang.now::after{opacity:1;transform:scale(1)}
