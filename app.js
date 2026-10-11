@@ -359,10 +359,10 @@ const gb = b => (b / 1e9).toLocaleString('es-ES', { maximumFractionDigits: 2 });
 // Comprueba que el motor traduce bien. Algunas GPU de móvil dan resultados corruptos con WebGPU.
 async function selfTest() {
   try {
-    const r = await wllama.createChatCompletion({
+    const r = await withLlm(() => wllama.createChatCompletion({
       messages: [{ role: 'user', content: buildPrompt('Buenos días', 'en', 'es') }],
       max_tokens: 16, temp: 0, top_k: 1,
-    });
+    }));
     const out = (r?.choices?.[0]?.message?.content || '').trim();
     console.log('Prueba del motor:', out);
     return /good|morning/i.test(out) && !/[^\x00-\x7F’'"]/.test(out);
@@ -789,7 +789,7 @@ let ear = null, earId = 0, earQ = Promise.resolve();
 const earWait = new Map();
 function earWorker() {
   if (ear) return ear;
-  ear = new Worker('./listen.js?v=29', { type: 'module' });
+  ear = new Worker('./listen.js?v=30', { type: 'module' });
   ear.onmessage = ({ data: m }) => {
     if (m.type === 'progress') {
       if (m.kind === 'stt' && talk.on && !talk.sttReady) {
@@ -1011,7 +1011,7 @@ function dropTurn(el) {
   if (!tel.list.querySelector('.turn')) { tel.empty.hidden = false; tel.clear.disabled = true; }
 }
 function hold(on) {
-  talk.hold = on; talk.holdUntil = on ? performance.now() + 60000 : 0;
+  talk.hold = on; talk.holdUntil = on ? performance.now() + 180000 : 0;
   nat.busy = on; gate.ring.length = 0; gate.streak = 0;
   if (!on) gate.mute = performance.now() + 400;   // un respiro para que el eco del altavoz se apague
 }
@@ -1069,7 +1069,11 @@ function addTurn(side) {
   return d;
 }
 const scrollEnd = () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
-async function translateOne(text, src, tgt, onDelta) {
+// El motor de traducción solo atiende una petición a la vez: las pongo en cola.
+let llmQueue = Promise.resolve();
+const withLlm = fn => { const p = llmQueue.then(fn, fn); llmQueue = p.catch(() => {}); return p; };
+const translateOne = (...args) => withLlm(() => translateOneNow(...args));
+async function translateOneNow(text, src, tgt, onDelta) {
   const key = `${tgt}\u0000${text}`;
   if (cache.has(key)) { onDelta?.(cache.get(key)); return cache.get(key); }
   if (job) { job.ctrl.abort(); await job.done.catch(() => {}); }
@@ -1106,28 +1110,42 @@ async function translateTurn(el, text, side) {
     let out = await fastTranslate(text, src, tgt);
     if (out == null) {
       if (!state.ready) { tSay('Esperando al traductor…', true); await whenReady(); }
-      out = await translateOne(text, src, tgt, partial => { heard.classList.remove('wait'); heard.textContent = partial; });
+      const go = () => translateOne(text, src, tgt, partial => { heard.classList.remove('wait'); heard.textContent = partial; });
+      try { out = await go(); }
+      catch (e1) {
+        console.warn('traducción, reintento', e1);
+        await new Promise(r => setTimeout(r, 400));
+        out = await go();
+      }
+      if (!out?.trim()) throw new Error('traducción vacía');
     }
     heard.classList.remove('wait'); heard.textContent = out; talk.last = out;
     scrollEnd();
     if (talk.voice && out) { speak(out, tgt, play); return true; }
   } catch (err) {
-    console.error(err); heard.classList.remove('wait'); heard.textContent = ''; toast('Algo falló al traducir. Prueba otra vez.');
+    console.error(err); heard.classList.remove('wait'); heard.textContent = '';
+    const why = String(err?.message || err?.name || err || '').replace(/\s+/g, ' ').slice(0, 70);
+    toast(why ? `Algo falló al traducir (${why}). Prueba otra vez.` : 'Algo falló al traducir. Prueba otra vez.');
   }
   return false;
 }
 /* Traductor integrado del navegador (Chrome de escritorio): instantáneo si ya tiene el par descargado. */
 const fastTr = new Map();
+const within = (p, ms) => Promise.race([p, new Promise((_, no) => setTimeout(() => no(new Error('tiempo')), ms))]);
+const fastOff = new Set();
 async function fastTranslate(text, src, tgt) {
   if (!('Translator' in self)) return null;
+  const opt = { sourceLanguage: src, targetLanguage: tgt }, key = src + '>' + tgt;
+  if (fastOff.has(key)) return null;
   try {
-    const opt = { sourceLanguage: src, targetLanguage: tgt }, key = src + '>' + tgt;
+    // En algunos móviles esta API existe pero se queda colgada: si tarda, uso nuestro traductor.
     if (!fastTr.has(key)) {
-      if ((await Translator.availability(opt)) !== 'available') return null;
-      fastTr.set(key, await Translator.create(opt));
+      if ((await within(Translator.availability(opt), 1500)) !== 'available') { fastOff.add(key); return null; }
+      fastTr.set(key, await within(Translator.create(opt), 3000));
     }
-    return await fastTr.get(key).translate(text);
-  } catch { return null; }
+    const out = await within(fastTr.get(key).translate(text), 6000);
+    return out?.trim() ? out : null;
+  } catch { fastOff.add(key); fastTr.delete(key); return null; }
 }
 const ttsDone = () => new Promise(res => {
   const t0 = performance.now();
