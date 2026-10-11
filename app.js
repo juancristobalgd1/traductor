@@ -783,7 +783,7 @@ let ear = null, earId = 0, earQ = Promise.resolve();
 const earWait = new Map();
 function earWorker() {
   if (ear) return ear;
-  ear = new Worker('./listen.js?v=26', { type: 'module' });
+  ear = new Worker('./listen.js?v=27', { type: 'module' });
   ear.onmessage = ({ data: m }) => {
     if (m.type === 'progress') {
       if (m.kind === 'stt' && talk.on && !talk.sttReady) {

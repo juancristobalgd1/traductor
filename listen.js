@@ -1,7 +1,7 @@
 // Oído del modo conversación (Web Worker). Todo corre en el dispositivo:
 //  - Whisper base (≈77 MB): pasa la voz a texto y decide cuál de los dos idiomas se habla.
 //  - Laya multilingüe (≈650 MB, opcional, WebGPU): decide si la persona ha terminado de hablar.
-import { env, AutoProcessor, AutoTokenizer, AutoModel, WhisperForConditionalGeneration, Tensor }
+import { env, AutoProcessor, AutoTokenizer, AutoModel, WhisperForConditionalGeneration, Tensor, LogitsProcessor, LogitsProcessorList }
   from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1';
 
 env.allowLocalModels = false;
@@ -50,6 +50,7 @@ async function loadGpu(onp) {
 }
 async function loadStt(cpuOnly) {
   if (stt) return stt;
+  loadVad();
   stt = (async () => {
     const onp = progress('stt');
     let got = null, id = STT_BASE, gpu = false;
@@ -107,16 +108,84 @@ async function detect(s, features, langs) {
   }
 }
 
+/* ------------------------- Silero VAD (≈2 MB) ------------------------- */
+// Detector de voz neuronal: a Whisper solo le llegan los trozos donde de verdad se habla.
+let vad = null;
+async function loadVad() {
+  if (!vad) vad = AutoModel.from_pretrained('onnx-community/silero-vad', { config: { model_type: 'custom' }, dtype: 'fp32' })
+    .catch(e => { console.warn('VAD no disponible', e); return null; });
+  return vad;
+}
+async function speechOnly(audio) {
+  const m = await loadVad(); if (!m) return audio;
+  const W = 512, n = Math.floor(audio.length / W); if (n < 4) return audio;
+  const sr = new Tensor('int64', [16000n], []);
+  let state = new Tensor('float32', new Float32Array(256), [2, 1, 128]);
+  const p = new Float32Array(n); let top = 0;
+  for (let i = 0; i < n; i++) {
+    const r = await m({ input: new Tensor('float32', audio.slice(i * W, (i + 1) * W), [1, W]), sr, state });
+    p[i] = r.output.data[0]; state = r.stateN; if (p[i] > top) top = p[i];
+  }
+  if (top < 0.3) return null;               // Ni rastro de voz: ruido, no se transcribe.
+  if (top < 0.5) return audio;              // Dudoso: mejor pasarlo entero que perder palabras.
+  // Tramos de voz con histéresis (entra a 0.5, sale tras 300 ms por debajo de 0.35).
+  const segs = []; let on = -1, low = 0;
+  for (let i = 0; i < n; i++) {
+    if (on < 0) { if (p[i] >= 0.5) { on = i; low = 0; } }
+    else if (p[i] < 0.35) { if (++low >= 10) { segs.push([on, i - low + 1]); on = -1; } }
+    else low = 0;
+  }
+  if (on >= 0) segs.push([on, n]);
+  const pad = 7, merged = [];               // ≈220 ms de margen a cada lado.
+  for (const [a, b] of segs) {
+    const x = Math.max(0, a - pad), y = Math.min(n, b + pad);
+    if (merged.length && x <= merged.at(-1)[1] + 6) merged.at(-1)[1] = y; else merged.push([x, y]);
+  }
+  const keep = merged.reduce((t, [a, b]) => t + b - a, 0);
+  if (keep >= n * 0.9) return audio;
+  const gap = 1600, out = new Float32Array(keep * W + gap * (merged.length - 1));
+  let o = 0;
+  merged.forEach(([a, b], k) => { out.set(audio.subarray(a * W, b * W), o); o += (b - a) * W + (k < merged.length - 1 ? gap : 0); });
+  return out;
+}
+
+/* ---------------- Calidad de la frase y reintento por temperatura ---------------- */
+// Apunta la probabilidad de cada palabra que elige Whisper para saber si "dudó".
+class Confidence extends LogitsProcessor {
+  constructor(start) { super(); this.start = start; this.prev = null; this.lp = []; }
+  take(tok) { if (this.prev) this.lp.push(this.prev.v[tok] - this.prev.lse); }
+  _call(ids, logits) {
+    const seq = ids[0];
+    if (seq.length > this.start) this.take(Number(seq[seq.length - 1]));
+    const V = logits.dims.at(-1), d = logits.data.subarray(logits.data.length - V);
+    let mx = -Infinity; for (let i = 0; i < V; i++) if (d[i] > mx) mx = d[i];
+    let s = 0; for (let i = 0; i < V; i++) if (d[i] > -Infinity) s += Math.exp(d[i] - mx);
+    this.prev = { v: Float32Array.from(d), lse: mx + Math.log(s) };
+    return logits;
+  }
+}
+async function ratio(text) {                // Compresión alta = frase repetitiva (bucle de Whisper).
+  if (text.length < 24 || typeof CompressionStream === 'undefined') return 1;
+  const b = new TextEncoder().encode(text);
+  const z = await new Response(new Blob([b]).stream().pipeThrough(new CompressionStream('gzip'))).arrayBuffer();
+  return b.length / Math.max(1, z.byteLength - 18);
+}
+
 async function transcribe({ audio, langs, lang, prompt }) {
   const s = await loadStt();
-  const { input_features } = await s.processor(audio);
+  let speech = audio;
+  try { speech = await speechOnly(audio); } catch (e) { console.warn('VAD', e); speech = audio; }
+  if (!speech) return { text: '', lang: lang || langs[0], model: s.id, gpu: s.gpu, vad: 'silence' };
+  const { input_features } = await s.processor(speech);
   const use = lang || (langs[0] === langs[1] ? langs[0] : await detect(s, input_features, langs));
-  const run = async (ctx) => {
+  const secs = speech.length / 16000;
+  const run = async (ctx, temperature = 0) => {
     const gen = {
       inputs: input_features, language: use, task: 'transcribe',
-      max_new_tokens: Math.min(220, 20 + Math.ceil(audio.length / 16000 * 8)),
+      max_new_tokens: Math.min(220, 20 + Math.ceil(secs * 8)),
       no_repeat_ngram_size: 4,
     };
+    if (temperature > 0) Object.assign(gen, { do_sample: true, temperature, top_k: 0 });
     // Contexto: lo último que se dijo en la conversación, en este mismo idioma (como el
     // "initial prompt" de Whisper). Ayuda con nombres, lugares y palabras sueltas.
     const sot = tid(s.tok, '<|startoftranscript|>');
@@ -126,17 +195,36 @@ async function transcribe({ audio, langs, lang, prompt }) {
       const p = Array.from(s.tok.encode(' ' + ctx.trim(), { add_special_tokens: false }), Number).slice(-80);
       if ([prev, sot, li, tr, nt].every(x => x != null) && p.length) gen.decoder_input_ids = [prev, ...p, sot, li, tr, nt];
     }
-    const out = await s.model.generate(gen);
-    let ids = out.tolist()[0].map(Number);
-    if (gen.decoder_input_ids) ids = ids.slice(gen.decoder_input_ids.length);
-    return (s.tok.decode(ids, { skip_special_tokens: true }) || '').replace(/\s+/g, ' ').trim();
+    const init = gen.decoder_input_ids?.length ?? 4;
+    const conf = new Confidence(init);
+    gen.logits_processor = new LogitsProcessorList(); gen.logits_processor.push(conf);
+    let ids;
+    try { ids = (await s.model.generate(gen)).tolist()[0].map(Number); }
+    catch (e) { if (temperature > 0) throw e; delete gen.logits_processor; ids = (await s.model.generate(gen)).tolist()[0].map(Number); conf.lp = []; }
+    conf.take(ids.at(-1));
+    const body = gen.decoder_input_ids ? ids.slice(gen.decoder_input_ids.length) : ids;
+    const text = (s.tok.decode(body, { skip_special_tokens: true }) || '').replace(/\s+/g, ' ').trim();
+    const logp = conf.lp.length ? conf.lp.reduce((a, b) => a + b, 0) / conf.lp.length : 0;
+    const cr = await ratio(text);
+    return { text, logp, cr, t: temperature, ok: cr <= 2.4 && logp >= -1 };
   };
-  let text = await run(prompt);
-  // Si con contexto repite lo anterior en vez de escuchar, se repite sin contexto.
   const norm = t => t.toLowerCase().replace(/[^\p{L}\p{N} ]/gu, '').trim();
-  if (prompt && text && norm(prompt).includes(norm(text))) text = await run(null);
+  let best = await run(prompt);
+  // Si con contexto repite lo anterior en vez de escuchar, se repite sin contexto.
+  if (prompt && best.text && norm(prompt).includes(norm(best.text))) best = await run(null);
+  // Como el Whisper original: si la frase sale dudosa o en bucle, se reintenta con más
+  // libertad (temperatura) y sin contexto, y se queda la versión en la que más confía.
+  if (!best.ok && best.text) {
+    for (const t of [0.3, 0.6]) {
+      let c; try { c = await run(null, t); } catch (e) { console.warn('reintento', e); break; }
+      if (c.text && (c.ok || c.logp > best.logp) && c.cr <= Math.max(2.4, best.cr)) best = c;
+      if (best.ok) break;
+    }
+  }
+  console.log('stt', JSON.stringify({ text: best.text, logp: +best.logp.toFixed(2), cr: +best.cr.toFixed(2), t: best.t, secs: +secs.toFixed(1), raw: +(audio.length / 16000).toFixed(1) }));
+  let text = best.text;
   // Alucinaciones típicas de Whisper con ruido o silencio.
-  if (/^(\[.*\]|\(.*\)|♪+|\.+|subt[ií]tulos.*|thanks? (you )?for watching.*|gracias\.?)$/i.test(text) && audio.length < 16000 * 1.2) text = '';
+  if (/^(\[.*\]|\(.*\)|♪+|\.+|subt[ií]tulos.*|thanks? (you )?for watching.*|gracias\.?)$/i.test(text) && secs < 1.2) text = '';
   return { text, lang: use, model: s.id, gpu: s.gpu };
 }
 
