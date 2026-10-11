@@ -755,9 +755,14 @@ function idleStatus() {
   if (!talk.on) return tSay(talk.sttReady ? 'Toca el micrófono para empezar' : 'Toca para empezar · 80 MB la primera vez');
   tSay(talk.laya && talk.layaReady ? 'Escuchando · Laya decide cuándo terminas' : 'Escuchando · hablad por turnos');
 }
+function setTalkLabel(btn, name) {
+  const s = btn.firstChild; if (s.textContent === name) return;
+  const first = !s.textContent; s.textContent = name;
+  if (!first && !btn.parentElement.classList.contains('swapping')) { s.classList.remove('chg'); void s.offsetWidth; s.classList.add('chg'); }
+}
 function talkRender() {
-  tel.langA.firstChild.textContent = L[talk.a].name;
-  tel.langB.firstChild.textContent = L[talk.b].name;
+  setTalkLabel(tel.langA, L[talk.a].name);
+  setTalkLabel(tel.langB, L[talk.b].name);
   tel.voice.setAttribute('aria-pressed', String(talk.voice));
   tel.voice.dataset.tip = talk.voice ? 'Voz activada' : 'Voz desactivada';
   tel.laya.setAttribute('aria-pressed', String(talk.laya));
@@ -870,13 +875,44 @@ function micStop() {
   try { mic.node.port.onmessage = null; mic.stream.getTracks().forEach(t => t.stop()); mic.ctx.close(); } catch {}
   mic = null; tel.mic.style.setProperty('--lvl', 0);
 }
+/* Ondas del micrófono: nivel suavizado (sube rápido, baja despacio) a 60 fps. */
+const micViz = {
+  hist: [], lv: 0, target: 0, voice: false, quietSince: 0, raf: 0,
+  bars: null, w: [0.55, 0.82, 1, 0.82, 0.55],
+  push(v, loud) {
+    const muted = window.speechSynthesis?.speaking || !talk.sttReady;
+    this.target = muted ? 0 : v;
+    this.hist.unshift(this.target); this.hist.length = Math.min(this.hist.length, 12);
+    if (!this.raf) this.raf = requestAnimationFrame(this.tick);
+  },
+  tick: () => {
+    const z = micViz, now = performance.now();
+    z.raf = 0;
+    if (!talk.on) return z.reset();
+    z.lv += (z.target - z.lv) * (z.target > z.lv ? 0.45 : 0.1);
+    if (z.lv > 0.14 || cur) { z.voice = true; z.quietSince = 0; }
+    else if (z.voice) { z.quietSince ||= now; if (now - z.quietSince > 380) z.voice = false; }
+    tel.mic.classList.toggle('voice', z.voice);
+    tel.mic.style.setProperty('--lv', z.lv.toFixed(3));
+    z.bars ||= tel.mic.querySelectorAll('.mic-wave i');
+    const t = now / 1000;
+    z.bars.forEach((b, i) => {
+      const past = z.hist[Math.abs(i - 2) * 2] ?? 0;
+      const wob = 0.06 * Math.sin(t * (7 + i * 1.7) + i);
+      const h = Math.min(1, 0.14 + (0.3 * z.lv + 0.7 * past) * z.w[i] * 1.15 + (z.voice ? wob : 0));
+      b.style.setProperty('--h', Math.max(0.12, h).toFixed(3));
+    });
+    if (z.lv > 0.004 || z.voice) z.raf = requestAnimationFrame(z.tick);
+  },
+  reset() { this.lv = this.target = 0; this.hist.length = 0; this.voice = false; cancelAnimationFrame(this.raf); this.raf = 0; tel.mic.classList.remove('voice'); tel.mic.style.setProperty('--lv', 0); this.bars?.forEach(b => b.style.setProperty('--h', 0.14)); },
+};
 function onFrame(f) {
   const now = performance.now();
   let s = 0; for (let i = 0; i < f.length; i++) s += f[i] * f[i];
   const rms = Math.sqrt(s / f.length);
   const th = Math.max(0.006, gate.floor * 3);   // umbral por relación señal/ruido, no absoluto
   const loud = rms > th;
-  tel.mic.style.setProperty('--lvl', Math.min(1, rms / (th * 5)).toFixed(3));
+  micViz.push(Math.min(1, Math.max(0, (rms - gate.floor) / (th * 4))), loud);
   // Mientras el móvil habla (la traducción en voz alta), no escucho: evita oírse a sí mismo.
   const speaking = window.speechSynthesis?.speaking;
   if (speaking) gate.mute = now + 350;
@@ -1027,6 +1063,7 @@ async function talkStart() {
   talkRender(); idleStatus();
 }
 function talkStop() {
+  micViz.reset();
   if (cur) { if (cur.voiced >= 250) closeTurn(); else { dropTurn(cur.el); cur = null; } }
   micStop(); talk.on = false; tel.status.classList.remove('live'); talkRender();
 }
@@ -1036,7 +1073,12 @@ tel.mic.addEventListener('click', () => (talk.on ? talkStop() : talkStart()));
 tel.langA.addEventListener('click', () => openPicker('ta'));
 tel.langB.addEventListener('click', () => openPicker('tb'));
 tel.swap.addEventListener('click', () => {
-  [talk.a, talk.b] = [talk.b, talk.a]; store.set('talk', { a: talk.a, b: talk.b }); haptic(); talkRender();
+  [talk.a, talk.b] = [talk.b, talk.a]; store.set('talk', { a: talk.a, b: talk.b }); haptic();
+  tel.swap._r = (tel.swap._r || 0) + 180; tel.swap.style.setProperty('--r', tel.swap._r + 'deg');
+  tel.swap.classList.remove('spin'); void tel.swap.offsetWidth; tel.swap.classList.add('spin');
+  const row = tel.langA.parentElement; row.classList.remove('swapping'); void row.offsetWidth; row.classList.add('swapping');
+  clearTimeout(row._t); row._t = setTimeout(() => row.classList.remove('swapping'), 450);
+  talkRender();
 });
 tel.voice.addEventListener('click', () => {
   talk.voice = !talk.voice; store.set('talkVoice', talk.voice); if (!talk.voice) speechSynthesis?.cancel?.();

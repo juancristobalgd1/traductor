@@ -496,3 +496,33 @@ textarea:focus::placeholder{opacity:.55}
   .modes .tab-ind{transition:none}.output .tk,.output .rv,.output.settle,.tools.appear .icon-btn,.icon-btn.done::after,body.boot *{animation:none!important}
   .top{transition:none}
 }
+
+/* ---------- Conversación: idiomas y micrófono con ondas de voz ---------- */
+.talk-lang{transition:background var(--fast),transform .38s var(--soft-spring)}
+.talk-lang:active{transform:scale(.96);background:var(--surface-2);transition-duration:var(--fast),.08s}
+.talk-lang svg{transition:transform var(--mid) var(--ease)}
+.talk-lang[aria-expanded="true"] svg{transform:rotate(180deg)}
+.talk-lang span.chg{animation:label .32s var(--ease)}
+.talk-langs.swapping #talkLangA span{animation:fromR .4s var(--ease)}
+.talk-langs.swapping #talkLangB span{animation:fromL .4s var(--ease)}
+#talkSwapBtn svg{transform:rotate(var(--r,0deg));transition:transform .55s var(--soft-spring)}
+#talkSwapBtn.spin{animation:swappulse .45s var(--ease)}
+/* Halo: dos aros suaves que respiran con la voz (sin bordes oscuros). */
+.talk-mic{--lv:0}
+.talk-mic::before{display:none}
+.talk-mic .mic-halo,.talk-mic .mic-halo::after{position:absolute;inset:0;border-radius:50%;background:var(--accent);opacity:0;pointer-events:none;will-change:transform,opacity}
+.talk-mic .mic-halo::after{content:""}
+.talk-mic.on .mic-halo{opacity:calc(.10 + var(--lv) * .10);transform:scale(calc(1.06 + var(--lv) * .34));transition:opacity .3s}
+.talk-mic.on .mic-halo::after{opacity:calc(.05 + var(--lv) * .06);transform:scale(calc(1.10 + var(--lv) * .52))}
+.talk-mic.on:not(.voice) .mic-halo{animation:breathe 2.6s ease-in-out infinite}
+@keyframes breathe{50%{transform:scale(1.12);opacity:.13}}
+/* Ondas: cinco barras redondeadas que sustituyen al icono mientras alguien habla. */
+.talk-mic .mic-wave{position:absolute;inset:0;z-index:2;display:flex;align-items:center;justify-content:center;gap:4px;opacity:0;transform:scale(.7);transition:opacity .22s var(--ease),transform .4s var(--soft-spring);pointer-events:none}
+.talk-mic .mic-wave i{display:block;width:4px;height:30px;border-radius:4px;background:currentColor;transform:scaleY(var(--h,.14));transform-origin:center;will-change:transform}
+.talk-mic>svg{transition:opacity .2s var(--ease),transform .4s var(--soft-spring)}
+.talk-mic.voice .mic-wave{opacity:1;transform:none}
+.talk-mic.voice>svg{opacity:0;transform:scale(.55)}
+@media (prefers-reduced-motion:reduce){
+  .talk-mic .mic-halo,.talk-mic .mic-halo::after{animation:none!important;transform:scale(1.08)!important}
+  .talk-langs.swapping span,.talk-lang span.chg{animation:none!important}
+}
