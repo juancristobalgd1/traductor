@@ -5,7 +5,9 @@ import { env, AutoProcessor, AutoTokenizer, AutoModel, WhisperForConditionalGene
   from 'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.3.1';
 
 env.allowLocalModels = false;
-const STT_ID = 'onnx-community/whisper-base';
+// Con GPU (WebGPU): Whisper small, bastante más preciso. Sin GPU: Whisper base, ligero para la CPU.
+const STT_SMALL = 'onnx-community/whisper-small';
+const STT_BASE = 'onnx-community/whisper-base';
 const LAYA_ID = 'onnx-community/laya-multilingual-ONNX';
 
 const post = (m) => self.postMessage(m);
@@ -26,22 +28,31 @@ async function loadStt() {
   if (stt) return stt;
   stt = (async () => {
     const onp = progress('stt');
-    const processor = await AutoProcessor.from_pretrained(STT_ID, { progress_callback: onp });
-    // Con WebGPU va varias veces más rápido; si falla, CPU (WASM) cuantizado.
-    let model = null;
+    let model = null, id = STT_BASE, gpu = false;
     try {
       const ad = navigator.gpu && await navigator.gpu.requestAdapter();
-      if (ad) model = await WhisperForConditionalGeneration.from_pretrained(STT_ID, {
-        dtype: { encoder_model: 'fp32', decoder_model_merged: 'q4' }, device: 'webgpu', progress_callback: onp,
-      });
-    } catch (e) { console.warn('Whisper WebGPU no disponible, uso CPU', e); model = null; }
-    if (!model) model = await WhisperForConditionalGeneration.from_pretrained(STT_ID, {
+      if (ad) {
+        const f16 = ad.features.has('shader-f16');
+        model = await WhisperForConditionalGeneration.from_pretrained(STT_SMALL, {
+          dtype: { encoder_model: f16 ? 'fp16' : 'q4', decoder_model_merged: 'q4' }, device: 'webgpu', progress_callback: onp,
+        });
+        id = STT_SMALL; gpu = true;
+      }
+    } catch (e) { console.warn('Whisper small con GPU no disponible, uso base en CPU', e); model = null; }
+    if (!model) model = await WhisperForConditionalGeneration.from_pretrained(STT_BASE, {
       dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' }, device: 'wasm', progress_callback: onp,
     });
+    const processor = await AutoProcessor.from_pretrained(id, { progress_callback: onp });
     const tok = processor.tokenizer;
     const sot = tid(tok, '<|startoftranscript|>');
     if (sot == null) throw new Error('sot');
-    return { processor, model, tok, sot };
+    const s = { processor, model, tok, sot, id, gpu };
+    // Primera pasada en vacío: compila todo para que el primer turno real no tarde de más.
+    try {
+      const { input_features } = await processor(new Float32Array(16000));
+      await model.generate({ inputs: input_features, language: 'en', task: 'transcribe', max_new_tokens: 2 });
+    } catch (e) { console.warn('warmup', e); }
+    return s;
   })();
   try { return await stt; } catch (e) { stt = null; throw e; }
 }
@@ -88,7 +99,7 @@ async function transcribe({ audio, langs, lang }) {
   text = text.replace(/\s+/g, ' ').trim();
   // Alucinaciones típicas de Whisper con ruido o silencio.
   if (/^(\[.*\]|\(.*\)|♪+|\.+|subt[ií]tulos.*|thanks? (you )?for watching.*|gracias\.?)$/i.test(text) && audio.length < 16000 * 1.2) text = '';
-  return { text, lang: use };
+  return { text, lang: use, model: s.id, gpu: s.gpu };
 }
 
 /* ------------------------------- Laya -------------------------------- */

@@ -752,8 +752,8 @@ const wcode = c => (c in WHISPER ? WHISPER[c] : c);
 
 function tSay(text, live = false) { tel.status.textContent = text; tel.status.classList.toggle('live', live); }
 function idleStatus() {
-  if (!talk.on) return tSay(talk.sttReady || useNative() ? 'Toca el micrófono para empezar' : 'Toca para empezar · 80 MB la primera vez');
-  if (useNative()) return natSpeaker();
+  if (!talk.on) return tSay(talk.sttReady || useNative() ? 'Toca el micrófono para empezar' : `Toca para empezar · ${navigator.gpu ? 'unos 400' : 'unos 80'} MB la primera vez, luego sin conexión`);
+  return natSpeaker();
   tSay(talk.laya && talk.layaReady ? 'Escuchando · Laya decide cuándo terminas' : 'Escuchando · hablad por turnos');
 }
 function setTalkLabel(btn, name) {
@@ -783,7 +783,7 @@ let ear = null, earId = 0, earQ = Promise.resolve();
 const earWait = new Map();
 function earWorker() {
   if (ear) return ear;
-  ear = new Worker('./listen.js?v=16', { type: 'module' });
+  ear = new Worker('./listen.js?v=21', { type: 'module' });
   ear.onmessage = ({ data: m }) => {
     if (m.type === 'progress') {
       if (m.kind === 'stt' && talk.on && !talk.sttReady) tSay(`Preparando el oído… ${m.pct}%`, true);
@@ -978,15 +978,15 @@ function closeTurn() {
   if (t.voiced < 250) return dropTurn(t.el);
   const audio = concat(t.frames);
   const el = t.el, said = el.querySelector('.said'), heard = el.querySelector('.heard');
+  // Por turnos: quien habla ahora es quien marca el idioma (sin adivinar, más rápido y preciso).
+  const side = nat.side, forced = wcode(talk[side]);
+  nat.side = otherSide(side); natSpeaker();
+  el.querySelector('.said').textContent = '';
   talk.busy = talk.busy.then(async () => {
     let res;
-    try { res = await earCall({ type: 'stt', audio, langs: langs() }); }
+    try { res = await earCall({ type: 'stt', audio, langs: langs(), lang: forced }); }
     catch (e) { console.error(e); dropTurn(el); toast('No pude entender el audio'); return; }
     if (!res.text) return dropTurn(el);
-    const [wa, wb] = langs();
-    // Si los dos idiomas suenan igual para Whisper (chino simplificado/tradicional), alterno.
-    const side = wa === wb ? (talk.lastSide === 'a' ? 'b' : 'a') : res.lang === wa ? 'a' : 'b';
-    talk.lastSide = side;
     await translateTurn(el, res.text, side);
     if (talk.on && !cur) idleStatus();
   });
@@ -1076,7 +1076,8 @@ const ttsDone = () => new Promise(res => {
 });
 
 /* --- Reconocimiento de voz del propio móvil/navegador: rápido, preciso y con texto en vivo --- */
-const NATIVE = !!Rec && !/[?&]stt=whisper/.test(location.search);
+// Todo sin conexión: el reconocimiento del navegador (que usa internet) solo si se pide con ?stt=native.
+const NATIVE = !!Rec && /[?&]stt=native/.test(location.search);
 const nat = { rec: null, side: 'a', gen: 0, t: 0, beat: 0, busy: false };
 const otherSide = s => (s === 'a' ? 'b' : 'a');
 function natSpeaker() {
@@ -1175,6 +1176,10 @@ window.talkStop = talkStop;
 
 tel.mic.addEventListener('click', () => (talk.on ? talkStop() : talkStart()));
 function pillTap(side) {
+  if (talk.on && !useNative()) {
+    if (nat.side === side) { openPicker(side === 'a' ? 'ta' : 'tb'); return; }
+    haptic(8); nat.side = side; natSpeaker(); return;
+  }
   if (talk.on && useNative()) {
     if (nat.side === side) { openPicker(side === 'a' ? 'ta' : 'tb'); return; }
     haptic(8); nat.side = side; if (!nat.busy) { natStop(); talk.on = true; natListen(); } else natSpeaker();
