@@ -533,3 +533,27 @@ textarea:focus::placeholder{opacity:.55}
 .talk-lang.now{color:var(--accent)}
 .talk-lang.now svg{color:var(--accent)}
 .talk-lang.now::after{opacity:1;transform:scale(1)}
+
+/* Glosario */
+.gloss{margin-top:14px;border:1px solid var(--border);border-radius:var(--radius);background:var(--card)}
+.gloss summary{display:flex;align-items:center;gap:10px;padding:14px 16px;cursor:pointer;list-style:none;font-weight:600;font-size:15px;user-select:none}
+.gloss summary::-webkit-details-marker{display:none}
+.gloss summary svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;color:var(--muted)}
+.gloss summary em{font-style:normal;font-size:12px;font-weight:600;color:var(--muted);background:var(--surface);border-radius:999px;padding:1px 8px}
+.gloss summary em:empty{display:none}
+.gloss summary .chev{margin-left:auto;width:18px;height:18px;transition:transform var(--fast)}
+.gloss[open] summary .chev{transform:rotate(90deg)}
+.gloss-hint{margin:0;padding:0 16px 10px;font-size:13px;color:var(--muted)}
+.gloss-list{list-style:none;margin:0;padding:0 8px}
+.gloss-list li{display:flex;align-items:center;gap:10px;padding:8px 8px 8px 8px;border-top:1px solid var(--border);font-size:14.5px}
+.gloss-list li span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.gloss-list li i{font-style:normal;color:var(--faint)}
+.gloss-list li button{display:grid;place-items:center;width:32px;height:32px;border-radius:50%;color:var(--faint)}
+.gloss-list li button svg,.gloss-add button svg{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+@media (hover:hover){.gloss-list li button:hover{background:var(--surface);color:var(--text)}}
+.gloss-add{display:flex;align-items:center;gap:8px;padding:10px 12px 12px;border-top:1px solid var(--border)}
+.gloss-add input{flex:1;min-width:0;height:38px;border:1px solid var(--border);border-radius:var(--r-sm);padding:0 12px;background:var(--bg);color:var(--text);font:inherit;font-size:14.5px;outline:0;transition:border-color var(--fast)}
+.gloss-add input:focus{border-color:var(--accent)}
+.gloss-add span{color:var(--faint)}
+.gloss-add button{display:grid;place-items:center;width:38px;height:38px;flex:none;border-radius:50%;background:var(--accent);color:#fff}
+@media (prefers-reduced-motion:reduce){.gloss summary .chev{transition:none}}

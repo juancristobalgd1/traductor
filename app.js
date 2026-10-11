@@ -512,7 +512,19 @@ els.deleteModel.addEventListener('click', async () => {
 });
 
 // ---------- Traducción ----------
+// Glosario del usuario, por idioma de destino: { en: [['marca', 'brand'], …] }.
+const glossary = () => store.get('gloss', {});
+function glossRefs(text, tgt, zh) {
+  const low = text.toLowerCase();
+  const hits = (glossary()[tgt] || []).filter(([a]) => a && low.includes(a.toLowerCase())).slice(0, 20);
+  if (!hits.length) return '';
+  return zh ? `参考下面的翻译：\n${hits.map(([a, b]) => `${a} 翻译成 ${b}`).join('\n')}\n`
+    : `Reference the following translations:\n${hits.map(([a, b]) => `${a} translates to ${b}`).join('\n')}\n\n`;
+}
 function buildPrompt(text, tgt, src, ctx) {
+  return glossRefs(text, tgt, CHINESE.has(tgt) || CHINESE.has(src)) + buildPromptBase(text, tgt, src, ctx);
+}
+function buildPromptBase(text, tgt, src, ctx) {
   const l = L[tgt];
   if (ctx) {
     if (CHINESE.has(tgt) || CHINESE.has(src)) return `【背景信息】\n${ctx}\n\n请结合背景信息将以下文本翻译为${l.zh}，注意只需要输出翻译后的结果，不要额外解释。\n\n【待翻译文本】\n${text}`;
@@ -1664,7 +1676,7 @@ function mdUnmask(out, masks) {
   return seen.size === masks.length ? res : null;
 }
 function mdPrompt(data, tgt) {
-  return `### Task\nTranslate the user-facing text within the following Markdown data into ${L[tgt].en}.\n\n### Strict Rules\n1. **Structure Preservation:** You MUST preserve the original Markdown data structure, nesting, hierarchy, and indentation exactly as they are.\n2. **Selective Translation:** Translate ONLY the visible, user-facing text content/values.\n3. **Strict Non-Translation:** NEVER translate or alter code tags, keys, properties, object names, or variable placeholders (such as {{0}}, {{1}}). Leave them exactly in their original form.\n\n### Source Data\n${data}`;
+  return glossRefs(data, tgt) + `### Task\nTranslate the user-facing text within the following Markdown data into ${L[tgt].en}.\n\n### Strict Rules\n1. **Structure Preservation:** You MUST preserve the original Markdown data structure, nesting, hierarchy, and indentation exactly as they are.\n2. **Selective Translation:** Translate ONLY the visible, user-facing text content/values.\n3. **Strict Non-Translation:** NEVER translate or alter code tags, keys, properties, object names, or variable placeholders (such as {{0}}, {{1}}). Leave them exactly in their original form.\n\n### Source Data\n${data}`;
 }
 const stripFence = s => s.replace(/^```[a-z]*\n([\s\S]*?)\n```$/i, '$1').trim();
 
@@ -1885,7 +1897,7 @@ function setSegText(seg, text) {
   if (seg.ts[0].setAttributeNS) seg.ts[0].setAttributeNS(XML_NS, 'xml:space', 'preserve');
 }
 function taggedPrompt(data, tgt) {
-  return `### Task\nTranslate the user-facing text within the following XML data into ${L[tgt].en}.\n\n### Strict Rules\n1. **Structure Preservation:** You MUST preserve the original XML data structure, nesting, hierarchy, and indentation exactly as they are.\n2. **Selective Translation:** Translate ONLY the visible, user-facing text content/values.\n3. **Strict Non-Translation:** NEVER translate or alter code tags, keys, properties, object names, or variable placeholders. Leave them exactly in their original English/code form.\n\n### Source Data\n${data}`;
+  return glossRefs(data, tgt) + `### Task\nTranslate the user-facing text within the following XML data into ${L[tgt].en}.\n\n### Strict Rules\n1. **Structure Preservation:** You MUST preserve the original XML data structure, nesting, hierarchy, and indentation exactly as they are.\n2. **Selective Translation:** Translate ONLY the visible, user-facing text content/values.\n3. **Strict Non-Translation:** NEVER translate or alter code tags, keys, properties, object names, or variable placeholders. Leave them exactly in their original English/code form.\n\n### Source Data\n${data}`;
 }
 
 class Degenerate extends Error {}
@@ -2484,4 +2496,36 @@ addEventListener('paste', e => {
   addEventListener('scroll', tick, { passive: true }); tick();
   document.body.classList.add('boot');
   setTimeout(() => document.body.classList.remove('boot'), 900);
+})();
+
+/* Glosario: cómo quieres que se traduzcan ciertos términos. */
+(() => {
+  const g = id => document.getElementById(id);
+  const box = g('gloss'); if (!box) return;
+  const list = g('glossList'), from = g('glossFrom'), to = g('glossTo');
+  const save = (tgt, rows) => { const all = glossary(); if (rows.length) all[tgt] = rows; else delete all[tgt]; store.set('gloss', all); cache.clear(); docCache.clear(); };
+  const render = () => {
+    const tgt = state.tgt, rows = glossary()[tgt] || [];
+    g('glossCount').textContent = rows.length || '';
+    g('glossHint').textContent = rows.length ? `Se aplica al traducir al ${(L[tgt]?.name ?? tgt).toLowerCase()}, también en texto y cámara.`
+      : `Añade términos para que se traduzcan siempre igual al ${(L[tgt]?.name ?? tgt).toLowerCase()}: marcas, nombres o palabras técnicas.`;
+    to.placeholder = `En ${(L[tgt]?.name ?? tgt).toLowerCase()}`;
+    list.replaceChildren(...rows.map(([x, y], i) => {
+      const li = document.createElement('li'), s = document.createElement('span'), b = document.createElement('button');
+      s.append(x, ' '); const arrow = document.createElement('i'); arrow.textContent = '→ '; s.append(arrow, y);
+      b.type = 'button'; b.setAttribute('aria-label', `Quitar ${x}`);
+      b.innerHTML = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+      b.onclick = () => { const r = glossary()[state.tgt] || []; r.splice(i, 1); save(state.tgt, r); render(); };
+      li.append(s, b); return li;
+    }));
+  };
+  g('glossAdd').addEventListener('submit', e => {
+    e.preventDefault();
+    const x = from.value.trim(), y = to.value.trim(); if (!x || !y) return;
+    const r = (glossary()[state.tgt] || []).filter(([k]) => k.toLowerCase() !== x.toLowerCase());
+    r.push([x, y]); save(state.tgt, r); from.value = ''; to.value = ''; from.focus(); render();
+  });
+  box.addEventListener('toggle', render);
+  let last = state.tgt; setInterval(() => { if (state.tgt !== last) { last = state.tgt; render(); } }, 500);
+  render();
 })();
