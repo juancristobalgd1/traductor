@@ -512,8 +512,12 @@ els.deleteModel.addEventListener('click', async () => {
 });
 
 // ---------- Traducción ----------
-function buildPrompt(text, tgt, src) {
+function buildPrompt(text, tgt, src, ctx) {
   const l = L[tgt];
+  if (ctx) {
+    if (CHINESE.has(tgt) || CHINESE.has(src)) return `【背景信息】\n${ctx}\n\n请结合背景信息将以下文本翻译为${l.zh}，注意只需要输出翻译后的结果，不要额外解释。\n\n【待翻译文本】\n${text}`;
+    return `[Background Information]\n${ctx}\n\nPlease translate the following text into ${l.en}, taking the provided background information into consideration. Note that you should only output the translated result without any additional explanation.\n\n[Source Text]\n${text}`;
+  }
   if (CHINESE.has(tgt) || CHINESE.has(src)) return `将以下文本翻译为${l.zh}，注意只需要输出翻译后的结果，不要额外解释：\n\n${text}`;
   return `Translate the following text into ${l.en}. Note that you should only output the translated result without any additional explanation:\n\n${text}`;
 }
@@ -795,7 +799,7 @@ let ear = null, earId = 0, earQ = Promise.resolve();
 const earWait = new Map();
 function earWorker() {
   if (ear) return ear;
-  ear = new Worker('./listen.js?v=31', { type: 'module' });
+  ear = new Worker('./listen.js?v=32', { type: 'module' });
   ear.onmessage = ({ data: m }) => {
     if (m.type === 'progress') {
       if (m.kind === 'stt' && talk.on && !talk.sttReady) {
@@ -1885,6 +1889,28 @@ function taggedPrompt(data, tgt) {
 }
 
 class Degenerate extends Error {}
+// Textos cortos (celdas, títulos): varios en una sola llamada con etiquetas <xN>.
+const isShort = u => !u.md && u.text.trim().length > 0 && u.text.trim().length <= 160 && !/\n/.test(u.text.trim())
+  && u.segs.filter(x => /\S/.test(x.text)).length === 1;
+async function translateBatch(batch, tgt, src, signal, onDelta) {
+  const res = new Array(batch.length).fill(null), todo = [];
+  batch.forEach((u, i) => { const c = docCache.get(`${tgt}\u0000${u.text.trim()}`); if (c != null) res[i] = c; else todo.push(i); });
+  if (todo.length > 1) {
+    const data = todo.map((i, k) => `<x${k}>${batch[i].text.trim()}</x${k}>`).join('\n');
+    const out = await llm(taggedPrompt(data, tgt), data.length * 3 + 96, signal, a => onDelta?.(a.replace(/<\/?x\d+>/g, '')));
+    const found = new Map();
+    for (const m of out.matchAll(/<x(\d+)>([\s\S]*?)<\/x\1>/g)) found.set(+m[1], m[2].trim());
+    todo.forEach((i, k) => { const t = found.get(k); if (t && !/<\/?x\d+>/.test(t)) { res[i] = t; docCache.set(`${tgt}\u0000${batch[i].text.trim()}`, t); } });
+  }
+  // Lo que no volvió bien etiquetado (o un texto suelto) se traduce uno a uno.
+  for (let i = 0; i < batch.length; i++) if (res[i] == null) res[i] = await translatePlain(batch[i].text.trim(), tgt, src, signal);
+  batch.forEach((u, i) => {
+    const first = u.segs.find(x => /\S/.test(x.text)), lead = u.text.match(/^\s*/)[0], trail = u.text.match(/\s*$/)[0];
+    u.segs.forEach(x => { if (x !== first) setSegText(x, x === first ? x.text : (/\S/.test(x.text) ? '' : x.text)); });
+    setSegText(first, lead + res[i] + trail); res[i] = lead + res[i] + trail;
+  });
+  return res;
+}
 const llm = (...args) => withLlm(() => llmNow(...args));
 async function llmNow(prompt, maxTokens, signal, onDelta) {
   if (signal.aborted) throw new DOMException('aborted', 'AbortError');
@@ -1907,16 +1933,20 @@ async function llmNow(prompt, maxTokens, signal, onDelta) {
   return acc.trim();
 }
 
-async function translatePlain(text, tgt, src, signal, onDelta) {
+const tail = (t, n = 300) => { t = (t || '').replace(/\s+/g, ' ').trim(); return t.length > n ? '…' + t.slice(-n) : t; };
+async function translatePlain(text, tgt, src, signal, onDelta, ctx) {
   const key = `${tgt}\u0000${text}`;
   if (docCache.has(key)) return docCache.get(key);
   const out = [];
+  let prev = ctx;
   for (const pc of segment(text)) {
     if ('sep' in pc) { out.push(pc.sep); continue; }
     const lead = pc.text.match(/^\s*/)[0], trail = pc.text.match(/\s*$/)[0], core = pc.text.trim();
     const done = out.join('');
-    const r = await llm(buildPrompt(core, tgt, src), core.length * 3 + 64, signal, a => onDelta?.(done + lead + a));
+    // Le paso el párrafo anterior para que mantenga términos y tono en todo el documento.
+    const r = await llm(buildPrompt(core, tgt, src, prev && tail(prev)), core.length * 3 + 64, signal, a => onDelta?.(done + lead + a));
     out.push(lead + r + trail);
+    prev = core;
   }
   const res = out.join('');
   docCache.set(key, res);
@@ -1939,7 +1969,7 @@ async function translateMdText(text, tgt, src, signal, onDelta) {
   return res;
 }
 
-async function translateUnit(unit, tgt, src, signal, onDelta) {
+async function translateUnit(unit, tgt, src, signal, onDelta, ctx) {
   const live = unit.segs.filter(x => /\S/.test(x.text));
   if (!live.length) return;
   const edge = t => [t.match(/^\s*/)[0], t.match(/\s*$/)[0]];
@@ -1951,7 +1981,7 @@ async function translateUnit(unit, tgt, src, signal, onDelta) {
   if (live.length === 1 || unit.text.length > 1500) {
     const first = live[0];
     const [lead, trail] = edge(unit.text);
-    const res = await translatePlain(unit.text.trim(), tgt, src, signal, onDelta);
+    const res = await translatePlain(unit.text.trim(), tgt, src, signal, onDelta, ctx);
     unit.segs.forEach(x => { if (x !== first) setSegText(x, ''); });
     setSegText(first, lead + res + trail);
     return lead + res + trail;
@@ -2074,12 +2104,30 @@ async function translateDoc() {
     for (let i = 0; i < units.length; i++) {
       const unit = units[i];
       update(i);
+      if (isShort(unit) && isShort(units[i + 1] || {})) {
+        let j = i, chars = 0;
+        while (j < units.length && j - i < 12 && isShort(units[j]) && chars + units[j].text.length <= 900) chars += units[j++].text.length;
+        const batch = units.slice(i, j), ps = batch.map(u => {
+          const p = document.createElement('p'); p.className = 'cur'; p.textContent = u.text; del.preview.appendChild(p); return p;
+        });
+        while (del.preview.children.length > 400) del.preview.firstElementChild.remove();
+        ps.at(-1).scrollIntoView({ block: 'nearest' });
+        try {
+          const res = await translateBatch(batch, tgt, src, ctrl.signal);
+          ps.forEach((p, k) => { p.textContent = res[k] ?? batch[k].text; p.classList.remove('cur'); });
+          batch.forEach(u => { doneChars += u.text.length; });
+          i = j - 1; continue;
+        } catch (e) {
+          if (!(e instanceof Degenerate)) throw e;
+          ps.forEach(p => p.remove()); // sigue uno a uno, que ya sabe qué hacer si la GPU falla
+        }
+      }
       const p = document.createElement('p'); p.className = 'cur'; p.textContent = unit.text;
       del.preview.appendChild(p);
       if (del.preview.children.length > 400) del.preview.firstElementChild.remove();
       p.scrollIntoView({ block: 'nearest' });
       try {
-        const res = await translateUnit(unit, tgt, src, ctrl.signal, a => { p.textContent = a; });
+        const res = await translateUnit(unit, tgt, src, ctrl.signal, a => { p.textContent = a; }, units[i - 1]?.text);
         p.textContent = res ?? unit.text;
       } catch (e) {
         if (e instanceof Degenerate) {
