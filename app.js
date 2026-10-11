@@ -362,10 +362,11 @@ const gb = b => (b / 1e9).toLocaleString('es-ES', { maximumFractionDigits: 2 });
 // Comprueba que el motor traduce bien. Algunas GPU de móvil dan resultados corruptos con WebGPU.
 async function selfTest() {
   try {
-    const r = await withLlm(() => wllama.createChatCompletion({
+    const run = () => wllama.createChatCompletion({
       messages: [{ role: 'user', content: buildPrompt('Buenos días', 'en', 'es') }],
       max_tokens: 16, temp: 0, top_k: 1,
-    }));
+    });
+    const r = await (reviving ? run() : withLlm(run));
     const out = (r?.choices?.[0]?.message?.content || '').trim();
     console.log('Prueba del motor:', out);
     return /good|morning/i.test(out) && !/[^\x00-\x7F’'"]/.test(out);
@@ -422,7 +423,7 @@ async function loadModel() {
   const base = { n_ctx: 4096, n_batch: 512, progressCallback, useCache: true };
   const pref = store.get('engine', 'auto');          // auto | cpu | gpu
   const gpuBroken = store.get('gpuBroken', false);   // en este dispositivo la GPU traduce mal
-  if (wllama) { try { await wllama.exit(); } catch {} wllama = null; }
+  if (wllama) { const w = wllama; wllama = null; await Promise.race([w.exit().catch(() => {}), new Promise(r => setTimeout(r, 1500))]); }
 
   const loadWith = async gpu => {
     wllama = make(); started = performance.now();
@@ -608,6 +609,7 @@ async function translateNow() {
       let acc = '';
       await withLlm(async () => {
         if (ctrl.signal.aborted) return;
+        acc = '';
         const stream = await wllama.createChatCompletion({
           messages: [{ role: 'user', content: buildPrompt(core, tgt, src) }],
           stream: true,
@@ -1093,7 +1095,23 @@ function addTurn(side) {
 const scrollEnd = () => window.scrollTo({ top: document.documentElement.scrollHeight, behavior: 'smooth' });
 // El motor de traducción solo atiende una petición a la vez: las pongo en cola.
 let llmQueue = Promise.resolve();
-const withLlm = fn => { const p = llmQueue.then(fn, fn); llmQueue = p.catch(() => {}); return p; };
+// Si el motor de WebAssembly muere (casi siempre por falta de memoria en el móvil) ya no responde nunca más:
+// lo reabro desde el dispositivo y repito la petición una vez.
+const isCrash = e => /has crashed|RuntimeError|out of bounds|unreachable|Aborted\(/i.test(String(e?.message || e));
+let reviving = null;
+async function revive() {
+  reviving ||= (async () => { state.ready = false; toast('El traductor se quedó sin memoria. Lo reabro…'); await loadModel(); })()
+    .finally(() => { reviving = null; });
+  await reviving;
+  if (!state.ready) throw new Error('no se pudo reabrir el traductor');
+}
+const withLlm = fn => {
+  const run = async () => {
+    try { return await fn(); }
+    catch (e) { if (!isCrash(e)) throw e; console.warn('El motor se cayó, lo reabro', e); await revive(); return fn(); }
+  };
+  const p = llmQueue.then(run, run); llmQueue = p.catch(() => {}); return p;
+};
 const translateOne = async (...args) => {
   if (job) { job.ctrl.abort(); await job.done.catch(() => {}); }
   return withLlm(() => translateOneNow(...args));
