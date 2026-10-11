@@ -1,6 +1,6 @@
 // Service worker: guarda la app para usarla sin conexión y añade las cabeceras
 // COOP/COEP para que el navegador permita usar varios hilos (más velocidad).
-const VERSION = 'traductor-v30';
+const VERSION = 'traductor-v31';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon-v2.svg', './icons/icon-192-v2.png', './icons/icon-512-v2.png', './icons/maskable-192-v2.png', './icons/maskable-512-v2.png', './icons/apple-touch-icon-v2.png',
   './vendor/wllama/index.js', './vendor/jszip/jszip.min.js', './vendor/wllama/wllama.wasm', './listen.js'];
 
@@ -29,8 +29,19 @@ self.addEventListener('fetch', e => {
   e.respondWith((async () => {
     const cache = await caches.open(VERSION);
     const key = req.mode === 'navigate' ? './index.html' : req;
+    // Librerías, fuentes e iconos no cambian entre versiones: uso lo guardado y abro al instante.
+    if (/\/(vendor|fonts|icons)\/|\/icon-v2\.svg$/.test(url.pathname)) {
+      const hit = await cache.match(req, { ignoreSearch: true });
+      if (hit) return isolate(hit);
+      const got = await fetch(req);
+      if (got.ok) cache.put(req, got.clone());
+      return isolate(got);
+    }
     try {
-      const fresh = await fetch(req, { cache: 'no-cache' });
+      // Con mala conexión no espero más de 4 s: paso a lo guardado si lo tengo.
+      const net = fetch(req, { cache: 'no-cache' });
+      const saved = await cache.match(key, { ignoreSearch: true });
+      const fresh = saved ? await Promise.race([net, new Promise((_, no) => setTimeout(() => no(new Error('lento')), 4000))]) : await net;
       if (fresh.ok) cache.put(key, fresh.clone());
       return isolate(fresh);
     } catch {

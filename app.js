@@ -146,7 +146,10 @@ const state = {
 let wllama = null;
 let job = null;          // { ctrl, done }
 let docBusy = false;     // hay un documento traduciéndose
-const cache = new Map(); // `${tgt}\u0000${segmento}` -> traducción
+class Lru extends Map { // guarda como mucho 500 traducciones; borra la más antigua
+  set(k, v) { super.delete(k); super.set(k, v); if (this.size > 500) super.delete(this.keys().next().value); return this; }
+}
+const cache = new Lru(); // `${tgt}\u0000${segmento}` -> traducción
 
 // ---------- Utilidades UI ----------
 const haptic = (ms = 8) => { if (matchMedia('(pointer:coarse)').matches) navigator.vibrate?.(ms); };
@@ -587,19 +590,22 @@ async function translateNow() {
       const lead = s.text.match(/^\s*/)[0], trail = s.text.match(/\s*$/)[0];
       const core = s.text.trim();
       let acc = '';
-      const stream = await wllama.createChatCompletion({
-        messages: [{ role: 'user', content: buildPrompt(core, tgt, src) }],
-        stream: true,
-        max_tokens: Math.min(2048, core.length * 3 + 64),
-        abortSignal: ctrl.signal,
-        ...SAMPLING,
+      await withLlm(async () => {
+        if (ctrl.signal.aborted) return;
+        const stream = await wllama.createChatCompletion({
+          messages: [{ role: 'user', content: buildPrompt(core, tgt, src) }],
+          stream: true,
+          max_tokens: Math.min(2048, core.length * 3 + 64),
+          abortSignal: ctrl.signal,
+          ...SAMPLING,
+        });
+        for await (const chunk of stream) {
+          if (ctrl.signal.aborted) break;
+          const d = chunk?.choices?.[0]?.delta?.content;
+          if (d) { acc += d; tokens++; results[i] = lead + acc; renderOutput(compose(), true); }
+          if (isDegenerate(acc)) { degenerate = true; ctrl.abort(); break; }
+        }
       });
-      for await (const chunk of stream) {
-        if (ctrl.signal.aborted) break;
-        const d = chunk?.choices?.[0]?.delta?.content;
-        if (d) { acc += d; tokens++; results[i] = lead + acc; renderOutput(compose(), true); }
-        if (isDegenerate(acc)) { degenerate = true; ctrl.abort(); break; }
-      }
       if (degenerate) break;
       if (ctrl.signal.aborted && !degenerate) throw new DOMException('aborted', 'AbortError');
       results[i] = lead + acc.trim() + trail;
@@ -789,7 +795,7 @@ let ear = null, earId = 0, earQ = Promise.resolve();
 const earWait = new Map();
 function earWorker() {
   if (ear) return ear;
-  ear = new Worker('./listen.js?v=30', { type: 'module' });
+  ear = new Worker('./listen.js?v=31', { type: 'module' });
   ear.onmessage = ({ data: m }) => {
     if (m.type === 'progress') {
       if (m.kind === 'stt' && talk.on && !talk.sttReady) {
@@ -1072,11 +1078,13 @@ const scrollEnd = () => window.scrollTo({ top: document.documentElement.scrollHe
 // El motor de traducción solo atiende una petición a la vez: las pongo en cola.
 let llmQueue = Promise.resolve();
 const withLlm = fn => { const p = llmQueue.then(fn, fn); llmQueue = p.catch(() => {}); return p; };
-const translateOne = (...args) => withLlm(() => translateOneNow(...args));
+const translateOne = async (...args) => {
+  if (job) { job.ctrl.abort(); await job.done.catch(() => {}); }
+  return withLlm(() => translateOneNow(...args));
+};
 async function translateOneNow(text, src, tgt, onDelta) {
   const key = `${tgt}\u0000${text}`;
   if (cache.has(key)) { onDelta?.(cache.get(key)); return cache.get(key); }
-  if (job) { job.ctrl.abort(); await job.done.catch(() => {}); }
   let out = '';
   const parts = segment(text);
   for (const p of parts) {
@@ -1438,7 +1446,7 @@ const del = {
   stop: D('docStop'), download: D('docDownload'), share: D('docShare'),
 };
 const docState = { file: null, parsed: null, result: null, ctrl: null };
-const docCache = new Map();
+const docCache = new Lru();
 
 function setMode(mode) {
   const prev = store.get('mode', 'text');
@@ -1801,7 +1809,7 @@ async function getFont(url) {
 async function pdfFonts(doc, tgt) {
   const cjk = PDF_CJK[tgt];
   if (cjk) {
-    const f = await doc.embedFont(await getFont(`https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@main/Sans/SubsetOTF/${cjk}/NotoSans${cjk}-Regular.otf`), { subset: true });
+    const f = await doc.embedFont(await getFont(`https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/${cjk}/NotoSans${cjk}-Regular.otf`), { subset: true });
     return { r: f, cjk: true };
   }
   const out = {};
@@ -1877,7 +1885,9 @@ function taggedPrompt(data, tgt) {
 }
 
 class Degenerate extends Error {}
-async function llm(prompt, maxTokens, signal, onDelta) {
+const llm = (...args) => withLlm(() => llmNow(...args));
+async function llmNow(prompt, maxTokens, signal, onDelta) {
+  if (signal.aborted) throw new DOMException('aborted', 'AbortError');
   const c = new AbortController();
   const relay = () => c.abort(); signal.addEventListener('abort', relay, { once: true });
   let acc = '';
@@ -2321,6 +2331,7 @@ async function camOcr() {
 }
 
 async function camRun(ocr) {
+  if (docBusy) { toast('Espera a que termine lo que se está traduciendo'); return; }
   const ctrl = new AbortController(); camState.ctrl = ctrl;
   docBusy = true; camButtons(false);
   let lock = null; try { lock = await navigator.wakeLock?.request('screen'); } catch {}
