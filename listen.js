@@ -11,9 +11,11 @@ const STT_BASE = 'onnx-community/whisper-base';
 const LAYA_ID = 'onnx-community/laya-multilingual-ONNX';
 
 const post = (m) => self.postMessage(m);
+let lastEvt = Date.now();
 const progress = (kind) => {
   const files = {};
   return (p) => {
+    lastEvt = Date.now();
     if (p.status === 'progress' && p.total) {
       files[p.file] = [p.loaded, p.total];
       let a = 0, b = 0; for (const [l, t] of Object.values(files)) { a += l; b += t; }
@@ -24,35 +26,54 @@ const progress = (kind) => {
 
 /* ------------------------------ Whisper ------------------------------ */
 let stt = null;
-async function loadStt() {
+// Si la GPU se queda colgada (sin novedades durante un rato), salta a la CPU.
+function stall(ms) {
+  let t; const p = new Promise((_, ko) => { t = setInterval(() => { if (Date.now() - lastEvt > ms) ko(new Error('gpu-timeout')); }, 1000); });
+  return { p, stop: () => clearInterval(t) };
+}
+async function warm(processor, model) {
+  const { input_features } = await processor(new Float32Array(16000));
+  await model.generate({ inputs: input_features, language: 'en', task: 'transcribe', max_new_tokens: 2 });
+}
+async function loadGpu(onp) {
+  const ad = navigator.gpu && await navigator.gpu.requestAdapter();
+  if (!ad) return null;
+  const f16 = ad.features.has('shader-f16');
+  const model = await WhisperForConditionalGeneration.from_pretrained(STT_SMALL, {
+    dtype: { encoder_model: f16 ? 'fp16' : 'q4', decoder_model_merged: 'q4' }, device: 'webgpu', progress_callback: onp,
+  });
+  post({ type: 'progress', kind: 'stt', phase: 'init' });
+  const processor = await AutoProcessor.from_pretrained(STT_SMALL, { progress_callback: onp });
+  lastEvt = Date.now();
+  await warm(processor, model);
+  return { model, processor };
+}
+async function loadStt(cpuOnly) {
   if (stt) return stt;
   stt = (async () => {
     const onp = progress('stt');
-    let model = null, id = STT_BASE, gpu = false;
-    try {
-      const ad = navigator.gpu && await navigator.gpu.requestAdapter();
-      if (ad) {
-        const f16 = ad.features.has('shader-f16');
-        model = await WhisperForConditionalGeneration.from_pretrained(STT_SMALL, {
-          dtype: { encoder_model: f16 ? 'fp16' : 'q4', decoder_model_merged: 'q4' }, device: 'webgpu', progress_callback: onp,
-        });
-        id = STT_SMALL; gpu = true;
-      }
-    } catch (e) { console.warn('Whisper small con GPU no disponible, uso base en CPU', e); model = null; }
-    if (!model) model = await WhisperForConditionalGeneration.from_pretrained(STT_BASE, {
-      dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' }, device: 'wasm', progress_callback: onp,
-    });
-    const processor = await AutoProcessor.from_pretrained(id, { progress_callback: onp });
+    let got = null, id = STT_BASE, gpu = false;
+    if (!cpuOnly) {
+      lastEvt = Date.now();
+      const w = stall(40000);
+      try { got = await Promise.race([loadGpu(onp), w.p]); if (got) { id = STT_SMALL; gpu = true; } }
+      catch (e) { console.warn('Whisper con GPU falló, uso la CPU', e); got = null; post({ type: 'progress', kind: 'stt', phase: 'cpu' }); }
+      finally { w.stop(); }
+    }
+    if (!got) {
+      const model = await WhisperForConditionalGeneration.from_pretrained(STT_BASE, {
+        dtype: { encoder_model: 'q8', decoder_model_merged: 'q8' }, device: 'wasm', progress_callback: onp,
+      });
+      post({ type: 'progress', kind: 'stt', phase: 'init' });
+      const processor = await AutoProcessor.from_pretrained(STT_BASE, { progress_callback: onp });
+      try { await warm(processor, model); } catch (e) { console.warn('warmup', e); }
+      got = { model, processor };
+    }
+    const { model, processor } = got;
     const tok = processor.tokenizer;
     const sot = tid(tok, '<|startoftranscript|>');
     if (sot == null) throw new Error('sot');
-    const s = { processor, model, tok, sot, id, gpu };
-    // Primera pasada en vacío: compila todo para que el primer turno real no tarde de más.
-    try {
-      const { input_features } = await processor(new Float32Array(16000));
-      await model.generate({ inputs: input_features, language: 'en', task: 'transcribe', max_new_tokens: 2 });
-    } catch (e) { console.warn('warmup', e); }
-    return s;
+    return { processor, model, tok, sot, id, gpu };
   })();
   try { return await stt; } catch (e) { stt = null; throw e; }
 }
@@ -186,7 +207,7 @@ async function judge({ text, before, quietMs }) {
 /* ----------------------------- mensajes ------------------------------ */
 self.onmessage = async ({ data: m }) => {
   try {
-    if (m.type === 'load-stt') { await loadStt(); post({ type: 'ready', id: m.id, kind: 'stt' }); }
+    if (m.type === 'load-stt') { const s = await loadStt(m.cpu); post({ type: 'ready', id: m.id, kind: 'stt', gpu: s.gpu }); }
     else if (m.type === 'load-laya') { const L = await loadLaya(); post({ type: 'ready', id: m.id, kind: 'laya', fp16: L.fp16 }); }
     else if (m.type === 'stt') post({ type: 'stt', id: m.id, ...(await transcribe(m)) });
     else if (m.type === 'judge') post({ type: 'judge', id: m.id, ...(await judge(m)) });

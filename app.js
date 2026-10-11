@@ -783,10 +783,14 @@ let ear = null, earId = 0, earQ = Promise.resolve();
 const earWait = new Map();
 function earWorker() {
   if (ear) return ear;
-  ear = new Worker('./listen.js?v=21', { type: 'module' });
+  ear = new Worker('./listen.js?v=23', { type: 'module' });
   ear.onmessage = ({ data: m }) => {
     if (m.type === 'progress') {
-      if (m.kind === 'stt' && talk.on && !talk.sttReady) tSay(`Preparando el oído… ${m.pct}%`, true);
+      if (m.kind === 'stt' && talk.on && !talk.sttReady) {
+        if (m.phase === 'cpu') { store.set('sttcpu', 1); tSay('Tu GPU no responde, paso al modo ligero…', true); }
+        else if (m.phase === 'init') tSay('Preparando el oído…', true);
+        else tSay(`Descargando el oído… ${m.pct}%`, true);
+      }
       if (m.kind === 'laya' && talk.layaLoading) { layaRing(m.pct); if (talk.sttReady && talk.on && !cur) tSay(`Descargando Laya… ${m.pct}%`, true); }
       return;
     }
@@ -1161,7 +1165,7 @@ async function talkStart() {
   if (talk.laya) loadLaya();
   if (!talk.sttReady) {
     tSay('Preparando el oído…', true);
-    try { await earCall({ type: 'load-stt' }, false); talk.sttReady = true; }
+    try { await earCall({ type: 'load-stt', cpu: !!store.get('sttcpu', 0) }, false); talk.sttReady = true; }
     catch (e) { console.error(e); talkStop(); toast('No pude preparar el reconocimiento de voz. Revisa la conexión.'); return; }
   }
   talkRender(); idleStatus();
