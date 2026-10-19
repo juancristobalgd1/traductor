@@ -26,6 +26,7 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin) return; // el modelo se descarga directo de Hugging Face
+  if (url.pathname.endsWith('/vendor/indra/worker.js')) return; // el worker del lector va directo, sin pasar por aquí
   e.respondWith((async () => {
     const cache = await caches.open(VERSION);
     const key = req.mode === 'navigate' ? './index.html' : req;

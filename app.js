@@ -2408,7 +2408,7 @@ async function getIndra() {
   indraW = new Indra({
     onProgress: p => {
       tick();
-      if (p.state === 'boot') { cel.status.textContent = 'Arrancando el lector…'; }
+      if (p.state === 'boot') { console.log('lector: boot, aislado:', p.isolated, 'núcleos:', p.cores); cel.status.textContent = 'Arrancando el lector…'; }
       else if (p.state === 'ort' || p.state === 'modules') { cel.status.textContent = 'Cargando el lector…'; }
       else if (p.state === 'boot-error') { console.error('arranque del lector:', p.message); boomNo(new Error(p.message || 'error de arranque')); }
       else if (p.state === 'progress') {
@@ -2417,7 +2417,8 @@ async function getIndra() {
       } else if (p.state === 'ready') setCamBar(30);
     },
   });
-  indraW.worker.addEventListener('error', e => boomNo(new Error('el lector no arrancó: ' + (e.message || e))));
+  indraW.worker.addEventListener('error', e => boomNo(new Error(`el lector no arrancó: ${e.message || '(sin mensaje)'} @ ${e.filename || '?'}:${e.lineno || '?'}`)));
+  indraW.worker.addEventListener('messageerror', () => boomNo(new Error('el lector no arrancó: mensaje ilegal')));
   await Promise.race([indraW.ready, dead, boom]);
   tick();
   return indraW;
