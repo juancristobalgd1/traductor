@@ -2341,7 +2341,7 @@ function renderCam() {
   const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
   const info = [];
   for (const b of camState.blocks) {
-    const row = { x0: Math.round(b.bb.x0), y0: Math.round(b.bb.y0), x1: Math.round(b.bb.x1), y1: Math.round(b.bb.y1), lh: Math.round((b.lineH || 0) * 10) / 10, st: Math.round((b.step || 0) * 10) / 10, tr: (b.tr || '').length };
+    const row = { x0: Math.round(b.bb.x0), y0: Math.round(b.bb.y0), x1: Math.round(b.bb.x1), y1: Math.round(b.bb.y1), lh: Math.round((b.lineH || 0) * 10) / 10, st: Math.round((b.step || 0) * 10) / 10, tr: (b.tr || '').length, bg: b.bg && b.bg.map(n => Math.round(n)), col: b.color && b.color.map(n => Math.round(n)), txt: (b.tr || '').slice(0, 30) };
     info.push(row);
     if (!b.tr) { row.skip = 'sin_tr'; continue; }
     const pad = Math.max(2, b.lineH * 0.15);
