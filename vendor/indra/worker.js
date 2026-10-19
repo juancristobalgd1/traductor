@@ -1,12 +1,26 @@
 // Web worker: loads the models once and OCRs grayscale pages posted to it,
 // so the page stays responsive while ONNX Runtime runs.
-import * as ort from "../../ort/ort.wasm.min.mjs";
-import { IndraOCR } from "./pipeline.js";
-import { cachedLoader } from "./models.js";
+const post = (p) => self.postMessage({ type: "progress", name: "boot", ...p });
+post({ state: "boot" });
+
+let ort, IndraOCR, cachedLoader;
+try {
+  ort = await import("../../ort/ort.wasm.min.mjs");
+  post({ state: "ort" });
+  ({ IndraOCR } = await import("./pipeline.js"));
+  ({ cachedLoader } = await import("./models.js"));
+  post({ state: "modules" });
+} catch (e) {
+  post({ state: "boot-error", message: String(e?.message ?? e) });
+  throw e;
+}
 
 ort.env.wasm.wasmPaths = new URL("../../ort/", self.location.href).href;
 // Threads need a cross-origin isolated page; elsewhere ONNX Runtime runs single-threaded.
 ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+
+self.addEventListener("error", (e) => post({ state: "boot-error", message: String(e.message || e) }));
+self.addEventListener("unhandledrejection", (e) => post({ state: "boot-error", message: String(e.reason?.message ?? e.reason) }));
 
 let ready = null;
 

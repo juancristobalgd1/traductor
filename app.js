@@ -2403,16 +2403,22 @@ async function getIndra() {
   let last = 0; // si el lector no da señal en 90 s, lo doy por muerto y sigo con Tesseract
   const tick = () => { last = Date.now(); };
   const dead = new Promise((_, no) => setTimeout(() => { if (!last || Date.now() - last > 89000) no(new Error('el lector no responde')); }, 90000));
+  let boomNo;
+  const boom = new Promise((_, no) => { boomNo = no; });
+  indraW.worker.addEventListener('error', e => boomNo(new Error('el lector no arrancó: ' + (e.message || e))));
   indraW = new Indra({
     onProgress: p => {
       tick();
-      if (p.state === 'progress') {
+      if (p.state === 'boot') { cel.status.textContent = 'Arrancando el lector…'; }
+      else if (p.state === 'ort' || p.state === 'modules') { cel.status.textContent = 'Cargando el lector…'; }
+      else if (p.state === 'boot-error') { console.error('arranque del lector:', p.message); boomNo(new Error(p.message || 'error de arranque')); }
+      else if (p.state === 'progress') {
         cel.status.textContent = `Descargando el lector de texto… ${(p.loaded / 1e6).toFixed(0)} de ~${Math.round(p.total / 1e6)} MB`;
         setCamBar(Math.min(30, p.loaded / p.total * 30));
       } else if (p.state === 'ready') setCamBar(30);
     },
   });
-  await Promise.race([indraW.ready, dead]);
+  await Promise.race([indraW.ready, dead, boom]);
   tick();
   return indraW;
 }
