@@ -1,3 +1,4 @@
+const FAKE = (() => { try { if (new URLSearchParams(location.search).has('fake')) sessionStorage.setItem('t_fake', '1'); return sessionStorage.getItem('t_fake') === '1'; } catch (e) { return false; } })();
 import { Wllama } from './vendor/wllama/index.js';
 
 // ---------- Configuración ----------
@@ -2384,7 +2385,7 @@ function renderCam() {
     lines.forEach((ln, i) => ctx.fillText(ln, rtl ? b.bb.x1 : b.bb.x0, top + i * lh, w + pad));
   }
   camState.lastRender = info;
-  if (new URLSearchParams(location.search).has('fake')) dbg('RENDER ' + JSON.stringify(info));
+  if (FAKE) dbg('RENDER ' + JSON.stringify(info));
 }
 
 function renderCamTexts() {
@@ -2556,7 +2557,7 @@ async function camRun(ocr) {
         cel.status.textContent = state.src === 'auto' ? 'No encontré texto. Si está en otro alfabeto, elige su idioma arriba.' : 'No encontré texto en la foto';
         setCamBar(0); return;
       }
-      if (new URLSearchParams(location.search).has('fake')) {
+      if (FAKE) {
         camState.tgt = 'en';
         camState.blocks.forEach(b => { b.tr = b.text; b.el && (b.el.textContent = b.text); });
         renderCamTexts(); renderCam();
