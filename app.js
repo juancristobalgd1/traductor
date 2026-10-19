@@ -2218,7 +2218,7 @@ del.remove.addEventListener('click', () => {
 });
 
 // =====================================================================
-// ---------- Cámara: foto → lectura del texto (Tesseract) → traducción encima ----------
+// ---------- Cámara: foto → lectura del texto (Indra, con Tesseract de reserva) → traducción encima ----------
 // =====================================================================
 const TESS = { es: 'spa', en: 'eng', fr: 'fra', pt: 'por', it: 'ita', de: 'deu', nl: 'nld', pl: 'pol', cs: 'ces', uk: 'ukr', ru: 'rus',
   tr: 'tur', ar: 'ara', he: 'heb', fa: 'fas', ur: 'urd', hi: 'hin', mr: 'mar', gu: 'guj', bn: 'ben', ta: 'tam', te: 'tel', zh: 'chi_sim',
@@ -2390,22 +2390,70 @@ async function camImage(file) {
   await camRun(true);
 }
 
-async function camOcr() {
+/* Lector Indra (wasm): latín, griego, cirílico, devanagari, bengalí y chino/japonés en un modelo
+   moderno, mucho más preciso que Tesseract. El resto de alfabetos (árabe, hebreo, persa, urdu,
+   tailandés, coreano, tamil…) siguen con Tesseract. Los modelos (~9 MB y ~9 MB de chino) se
+   descargan una vez y quedan en la caché del navegador. */
+const INDRA_LANGS = new Set([...LATIN, 'ru', 'uk', 'kk', 'mn', 'hi', 'mr', 'bn', 'zh', 'zh-Hant', 'yue', 'ja']);
+let indraW = null;
+async function getIndra() {
+  if (indraW) return indraW;
+  cel.status.textContent = 'Descargando el lector de texto…'; setCamBar(0);
+  const { Indra } = await import('./vendor/indra/indra.js');
+  indraW = new Indra({ onProgress: () => { cel.status.textContent = 'Descargando el lector de texto…'; } });
+  await indraW.ready;
+  return indraW;
+}
+function grayOf(c) {
+  const d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+  const out = new Uint8Array(c.width * c.height);
+  for (let i = 0, p = 0; i < out.length; i++, p += 4) {
+    const a = d[p + 3], ia = 255 - a;
+    const r = (d[p] * a + 255 * ia) / 255, g = (d[p + 1] * a + 255 * ia) / 255, b = (d[p + 2] * a + 255 * ia) / 255;
+    out[i] = (r * 4899 + g * 9617 + b * 1868 + 8192) >> 14;
+  }
+  return { data: out, width: c.width, height: c.height };
+}
+async function tesseractOcr(chosen, fbLang) {
   const src = camState.src;
   const img = src.getContext('2d').getImageData(0, 0, src.width, src.height);
-  const chosen = state.src !== 'auto' ? state.src : null;
-  let langs = chosen ? [...new Set([TESS[chosen], 'eng'])].join('+') : 'eng+spa';
+  const l = chosen || fbLang;
+  let langs = l && TESS[l] ? `${TESS[l]}+eng` : 'eng+spa';
   let w = await getOcr(langs);
   let { data } = await w.recognize(src, {}, { blocks: true, text: true });
   let blocks = ocrBlocks(data, img);
-  let lang = chosen || detect(blocks.map(b => b.text).join('\n'));
-  if (!chosen && lang && LATIN.has(lang) && !['en', 'es'].includes(lang) && TESS[lang]) {
+  let lang = l || detect(blocks.map(b => b.text).join('\n'));
+  if (!l && lang && LATIN.has(lang) && !['en', 'es'].includes(lang) && TESS[lang]) {
     langs = `${TESS[lang]}+eng`; w = await getOcr(langs);
     ({ data } = await w.recognize(src, {}, { blocks: true, text: true }));
     blocks = ocrBlocks(data, img);
   }
   camState.ocrSrc = state.src; camState.lang = lang;
   return blocks;
+}
+async function camOcr() {
+  const src = camState.src;
+  const img = src.getContext('2d').getImageData(0, 0, src.width, src.height);
+  const chosen = state.src !== 'auto' ? state.src : null;
+  if (chosen && !INDRA_LANGS.has(chosen)) return tesseractOcr(chosen, null);
+  let lang = chosen;
+  try {
+    const w = await getIndra();
+    cel.status.textContent = 'Leyendo el texto…'; setCamBar(30);
+    const page = await w.page(grayOf(src), { turn: true, tables: false });
+    setCamBar(100);
+    // Adapto las líneas de Indra a la misma forma que usa Tesseract para reaprovechar el agrupado.
+    const flat = page.lines.filter(l => l.text.trim() && l.conf > 0.3)
+      .map(l => ({ text: l.text, confidence: l.conf * 100, bbox: { x0: l.box[0], y0: l.box[1], x1: l.box[2], y1: l.box[3] } }));
+    const blocks = ocrBlocks({ blocks: [{ paragraphs: [{ lines: flat }] }] }, img);
+    if (!chosen) lang = detect(blocks.map(b => b.text).join('\n'));
+    if (lang && !INDRA_LANGS.has(lang) && TESS[lang]) return tesseractOcr(null, lang);
+    camState.ocrSrc = state.src; camState.lang = lang;
+    return blocks;
+  } catch (e) {
+    console.warn('Indra no pudo leer la foto, repito con Tesseract', e);
+    return tesseractOcr(null, lang && TESS[lang] ? lang : null);
+  }
 }
 
 async function camRun(ocr) {
