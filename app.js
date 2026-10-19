@@ -2334,21 +2334,28 @@ function renderCam() {
   ctx.drawImage(src, 0, 0);
   if (camState.view !== 'tr') return;
   const tgt = camState.tgt, cjk = !!PDF_CJK[tgt], rtl = RTL.has(tgt);
+  // Si el texto traducido no cabe legible en su hueco, no toco la foto: mejor la imagen original
+  // que un rectangulo en blanco (pasaba en fotos torcidas y tickets con letra pequeña).
+  const scale = c.clientWidth > 0 ? c.clientWidth / c.width : 1;
+  const minSize = Math.max(13, 11 / scale);
   const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
   for (const b of camState.blocks) {
     if (!b.tr) continue;
     const pad = Math.max(2, b.lineH * 0.15);
     const w = b.bb.x1 - b.bb.x0, h = b.bb.y1 - b.bb.y0;
-    ctx.fillStyle = rgb(b.bg);
-    ctx.beginPath(); ctx.roundRect?.(b.bb.x0 - pad, b.bb.y0 - pad, w + pad * 2, h + pad * 2, pad); ctx.roundRect ? ctx.fill() : ctx.fillRect(b.bb.x0 - pad, b.bb.y0 - pad, w + pad * 2, h + pad * 2);
-    let size = b.lineH * 0.95, lines, lh;
+    if (!(w > 4) || !(h > 4)) continue;
+    let size = b.lineH * 0.95, lines = null, lh = 0;
     for (;;) {
       ctx.font = `600 ${size}px system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans", sans-serif`;
       lh = Math.max(size * 1.15, b.step * size / (b.lineH * 0.95));
       lines = wrapCanvas(ctx, b.tr, w, cjk);
-      if ((lines.length - 1) * lh + size <= h * 1.1 + 2 || size < 9) break;
+      if ((lines.length - 1) * lh + size <= h * 1.1 + 2) break;
+      if (size * 0.92 < minSize) { lines = null; break; }
       size *= 0.92;
     }
+    if (!lines || !lines.length) continue;
+    ctx.fillStyle = rgb(b.bg);
+    ctx.beginPath(); ctx.roundRect?.(b.bb.x0 - pad, b.bb.y0 - pad, w + pad * 2, h + pad * 2, pad); ctx.roundRect ? ctx.fill() : ctx.fillRect(b.bb.x0 - pad, b.bb.y0 - pad, w + pad * 2, h + pad * 2);
     ctx.fillStyle = rgb(b.color); ctx.textBaseline = 'top';
     ctx.direction = rtl ? 'rtl' : 'ltr'; ctx.textAlign = rtl ? 'right' : 'left';
     const top = b.bb.y0 + Math.max(0, (h - ((lines.length - 1) * lh + size)) / 2);
