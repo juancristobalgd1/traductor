@@ -2286,6 +2286,7 @@ function sampleColors(img, bb) {
 }
 
 function ocrBlocks(data, img) {
+  if (img && !img.data && img.getContext) img = img.getContext('2d').getImageData(0, 0, img.width, img.height);
   const out = [];
   // Tesseract a veces junta un cartel y el texto de debajo: separo por tamaño de letra y por huecos.
   const groups = [];
@@ -2301,7 +2302,19 @@ function ocrBlocks(data, img) {
     }
     if (g.length) groups.push(g);
   }
-  for (const lines of groups) {
+  const ordered = [];
+  const queue = groups.slice();
+  while (queue.length) {
+    const g = queue.shift().slice().sort((x, y) => x.bbox.y0 - y.bbox.y0);
+    const lhM = Math.max(...g.map(l => l.bbox.y1 - l.bbox.y0)) || 1;
+    const h = g[g.length - 1].bbox.y1 - g[0].bbox.y0;
+    if (g.length > 2 && h > lhM * 8) {
+      let bi = 1, best = -1;
+      for (let i = 1; i < g.length; i++) { const gap = g[i].bbox.y0 - g[i - 1].bbox.y1; if (gap > best) { best = gap; bi = i; } }
+      queue.push(g.slice(0, bi), g.slice(bi));
+    } else ordered.push(g);
+  }
+  for (const lines of ordered) {
     let text = lines.map(l => l.text.trim()).reduce((acc, t) => !acc ? t : /\p{L}-$/u.test(acc) && /^\p{Ll}/u.test(t) ? acc.slice(0, -1) + t : acc + ' ' + t, '');
     text = text.replace(/\s+/g, ' ').replace(/([\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af])\s+(?=[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af])/g, '$1').trim();
     const conf = lines.reduce((a, l) => a + l.confidence, 0) / lines.length;
@@ -2339,6 +2352,8 @@ function renderCam() {
   const scale = c.clientWidth > 0 ? c.clientWidth / c.width : 1;
   const minSize = Math.max(13, 11 / scale);
   const rgb = a => `rgb(${a[0]},${a[1]},${a[2]})`;
+  const lumOf = a => 0.299 * a[0] + 0.587 * a[1] + 0.114 * a[2];
+  const safe = a => Array.isArray(a) && a.length === 3 && a.every(n => n >= 0 && n <= 255) ? a : null;
   const info = [];
   for (const b of camState.blocks) {
     const row = { x0: Math.round(b.bb.x0), y0: Math.round(b.bb.y0), x1: Math.round(b.bb.x1), y1: Math.round(b.bb.y1), lh: Math.round((b.lineH || 0) * 10) / 10, st: Math.round((b.step || 0) * 10) / 10, tr: (b.tr || '').length, bg: b.bg && b.bg.map(n => Math.round(n)), col: b.color && b.color.map(n => Math.round(n)), txt: (b.tr || '').slice(0, 30) };
@@ -2358,15 +2373,18 @@ function renderCam() {
     }
     if (!lines || !lines.length) { row.skip = 'no_cabe'; continue; }
     row.paint = 1; row.size = Math.round(size * 10) / 10; row.nl = lines.length; row.lh2 = Math.round(lh * 10) / 10;
-    ctx.fillStyle = rgb(b.bg);
+    const bgC = safe(b.bg) || [255, 255, 255];
+    let colC = safe(b.color) || (lumOf(bgC) > 128 ? [17, 17, 17] : [255, 255, 255]);
+    if (Math.abs(lumOf(colC) - lumOf(bgC)) < 60) colC = lumOf(bgC) > 128 ? [17, 17, 17] : [255, 255, 255];
+    ctx.fillStyle = rgb(bgC);
     ctx.beginPath(); ctx.roundRect?.(b.bb.x0 - pad, b.bb.y0 - pad, w + pad * 2, h + pad * 2, pad); ctx.roundRect ? ctx.fill() : ctx.fillRect(b.bb.x0 - pad, b.bb.y0 - pad, w + pad * 2, h + pad * 2);
-    ctx.fillStyle = rgb(b.color); ctx.textBaseline = 'top';
+    ctx.fillStyle = rgb(colC); ctx.textBaseline = 'top';
     ctx.direction = rtl ? 'rtl' : 'ltr'; ctx.textAlign = rtl ? 'right' : 'left';
     const top = b.bb.y0 + Math.max(0, (h - ((lines.length - 1) * lh + size)) / 2);
     lines.forEach((ln, i) => ctx.fillText(ln, rtl ? b.bb.x1 : b.bb.x0, top + i * lh, w + pad));
   }
   camState.lastRender = info;
-  if (1) dbg('RENDER ' + JSON.stringify(info));
+  if (new URLSearchParams(location.search).has('fake')) dbg('RENDER ' + JSON.stringify(info));
 }
 
 function renderCamTexts() {
@@ -2538,7 +2556,7 @@ async function camRun(ocr) {
         cel.status.textContent = state.src === 'auto' ? 'No encontré texto. Si está en otro alfabeto, elige su idioma arriba.' : 'No encontré texto en la foto';
         setCamBar(0); return;
       }
-      if (1) {
+      if (new URLSearchParams(location.search).has('fake')) {
         camState.tgt = 'en';
         camState.blocks.forEach(b => { b.tr = b.text; b.el && (b.el.textContent = b.text); });
         renderCamTexts(); renderCam();
