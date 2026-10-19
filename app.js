@@ -104,7 +104,7 @@ function detect(text) {
     return 'ru';
   }
   if (has(/[ạảấầẩẫậắằẳẵặẹẻẽếềểễệỉịọỏốồổỗộớờởỡợụủứừửữựỳỵỷỹđ]/i)) return 'vi';
-  const words = t.toLowerCase().match(/[\p{L}']+/gu) || [];
+  const words = (t.toLowerCase().match(/[\p{L}']+/gu) || []).filter(w => !/\d/.test(w) && w.length >= 2 && w.length <= 24);
   if (!words.length) return null;
   const score = {};
   for (const [lang, set] of Object.entries(STOPSETS)) score[lang] = words.reduce((n, w) => n + (set.has(w) ? 1 : 0), 0);
@@ -117,6 +117,28 @@ function detect(text) {
   if (has(/[èêàùœ]/i)) score.fr += 1;
   const best = Object.entries(score).sort((a, b) => b[1] - a[1])[0];
   return best && best[1] > 0 ? best[0] : null;
+}
+
+// Deteccion en modo imagen: el detector neuronal del navegador (si el Chrome que lo abre
+// lo trae ya instalado) es mucho mas fiable con el ruido del OCR que las palabras comunes.
+async function detectCam(text) {
+  const t = text.slice(0, 4000);
+  try {
+    const LD = self.LanguageDetector || self.ai?.languageDetector;
+    if (LD) {
+      let avail = 'available';
+      try { avail = LD.availability ? LD.availability({ type: 'text' }) : 'available'; } catch {}
+      if (avail === 'available' || avail === 'downloading') {
+        const det = await LD.create({ type: 'text' });
+        let res = null;
+        if (typeof det.detect === 'function') res = await det.detect(t);
+        else if (typeof det.detectLanguage === 'function') res = [{ detectedLanguage: await det.detectLanguage(t), confidence: 1 }];
+        const sup = (Array.isArray(res) ? res : []).find(r => L[r.detectedLanguage] && r.confidence >= 0.2);
+        if (sup) return sup.detectedLanguage;
+      }
+    }
+  } catch (e) { dbg('el detector del navegador no va: ' + (e?.message || e)); }
+  return detect(t);
 }
 
 // ---------- Estado ----------
@@ -2528,7 +2550,7 @@ async function camOcr(ctrl) {
     const flat = page.lines.filter(l => l.text.trim() && l.conf > 0.3)
       .map(l => ({ text: l.text, confidence: l.conf * 100, bbox: { x0: l.box[0], y0: l.box[1], x1: l.box[2], y1: l.box[3] } }));
     const blocks = ocrBlocks({ blocks: [{ paragraphs: [{ lines: flat }] }] }, img);
-    if (!chosen) lang = detect(blocks.map(b => b.text).join('\n'));
+    if (!chosen) lang = await detectCam(blocks.map(b => b.text).join('\n'));
     if (lang && !INDRA_LANGS.has(lang) && TESS[lang]) return guard(tesseractOcr(null, lang));
     camState.ocrSrc = state.src; camState.lang = lang;
     const ms = page.timings?.total_ms;

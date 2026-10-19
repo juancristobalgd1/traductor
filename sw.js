@@ -1,6 +1,6 @@
 // Service worker: guarda la app para usarla sin conexión y añade las cabeceras
 // COOP/COEP para que el navegador permita usar varios hilos (más velocidad).
-const VERSION = 'traductor-v56';
+const VERSION = 'traductor-v57';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon-v2.svg', './icons/icon-192-v2.png', './icons/icon-512-v2.png', './icons/maskable-192-v2.png', './icons/maskable-512-v2.png', './icons/apple-touch-icon-v2.png',
   './vendor/wllama/index.js', './vendor/jszip/jszip.min.js', './vendor/wllama/wllama.wasm', './listen.js'];
 
