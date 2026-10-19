@@ -1975,6 +1975,9 @@ class Degenerate extends Error {}
 // Textos cortos (celdas, títulos): varios en una sola llamada con etiquetas <xN>.
 const isShort = u => !u.md && u.text.trim().length > 0 && u.text.trim().length <= 160 && !/\n/.test(u.text.trim())
   && u.segs.filter(x => /\S/.test(x.text)).length === 1;
+// Bloques medianos (hasta 480 caracteres, un solo tramo): se agrupan en una llamada igual que los cortos
+const isBatchable = u => !u.md && u.text.trim().length > 0 && u.text.trim().length <= 480 && !/\n/.test(u.text.trim())
+  && u.segs.filter(x => /\S/.test(x.text)).length === 1;
 async function translateBatch(batch, tgt, src, signal, onDelta) {
   const res = new Array(batch.length).fill(null), todo = [];
   batch.forEach((u, i) => { const c = docCache.get(`${tgt}\u0000${u.text.trim()}`); if (c != null) res[i] = c; else todo.push(i); });
@@ -2187,9 +2190,14 @@ async function translateDoc() {
     for (let i = 0; i < units.length; i++) {
       const unit = units[i];
       update(i);
-      if (isShort(unit) && isShort(units[i + 1] || {})) {
-        let j = i, chars = 0;
-        while (j < units.length && j - i < 12 && isShort(units[j]) && chars + units[j].text.length <= 900) chars += units[j++].text.length;
+      if (isBatchable(unit) && isBatchable(units[i + 1] || {})) {
+        let j = i, chars = 0, cap = 12;
+        while (j < units.length) {
+          const u = units[j];
+          if (!isBatchable(u) || chars + u.text.length > 1200 || j - i >= cap) break;
+          if (u.text.length > 160) cap = 6;
+          chars += u.text.length; j++;
+        }
         const batch = units.slice(i, j), ps = batch.map(u => {
           const p = document.createElement('p'); p.className = 'cur'; p.textContent = u.text; del.preview.appendChild(p); return p;
         });

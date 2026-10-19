@@ -1,0 +1,271 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Traductor · 33 idiomas, en tu dispositivo</title>
+<meta name="description" content="Traductor privado que funciona en tu navegador con el modelo Hy-MT2 1.8B. Sin servidores, sin conexión después de la primera descarga.">
+<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+<meta name="color-scheme" content="light dark">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-v2.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon-v2.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Traductor">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="stylesheet" href="style.css?v=20">
+<script>
+  // Activa el aislamiento entre orígenes (necesario para usar varios hilos) mediante el service worker.
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').then(reg => {
+      if (!window.crossOriginIsolated && !sessionStorage.getItem('coi-reloaded')) {
+        const reload = () => { sessionStorage.setItem('coi-reloaded', '1'); location.reload(); };
+        if (navigator.serviceWorker.controller) reload();
+        else navigator.serviceWorker.addEventListener('controllerchange', reload, { once: true });
+      }
+    }).catch(() => {});
+  }
+</script>
+</head>
+<body>
+<header class="top">
+  <div class="brand">
+    <span class="logo" aria-hidden="true">
+      <svg viewBox="0 0 512 512" width="28" height="28"><circle cx="256" cy="256" r="256" fill="#4C92E5"/><g fill="#fff"><rect x="143.5" y="193.5" width="25" height="125" rx="12.5"/><rect x="193.5" y="169" width="25" height="174" rx="12.5"/><rect x="243.5" y="147.5" width="25" height="217" rx="12.5"/><rect x="293.5" y="169" width="25" height="174" rx="12.5"/><rect x="343.5" y="193.5" width="25" height="125" rx="12.5"/></g></svg>
+    </span>
+    <span class="name">Traductor</span>
+  </div>
+  <nav class="modes" id="modes" role="tablist" aria-label="Qué traducir">
+    <span class="tab-ind" aria-hidden="true"></span>
+    <button role="tab" data-mode="text" class="sel" aria-selected="true"><svg viewBox="0 0 24 24"><path d="M4 7V5h16v2M9 19h6M12 5v14"/></svg><span class="lbl">Texto</span></button>
+    <button role="tab" data-mode="doc" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/></svg><span class="lbl">Documentos</span></button>
+    <button role="tab" data-mode="cam" aria-selected="false"><svg viewBox="0 0 24 24"><rect x="3.5" y="4.5" width="17" height="15" rx="2.5"/><circle cx="9" cy="10" r="1.6"/><path d="M20.5 15.5l-4.5-4.5-8.5 8.5"/></svg><span class="lbl">Imágenes</span></button>
+    <button role="tab" data-mode="talk" aria-selected="false"><svg viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h8A1.5 1.5 0 0 1 15 5.5v5a1.5 1.5 0 0 1-1.5 1.5H9l-3 2.5V12h-.5A1.5 1.5 0 0 1 4 10.5z"/><path d="M18 9h.5A1.5 1.5 0 0 1 20 10.5v5a1.5 1.5 0 0 1-1.5 1.5H18v2.5L15 17h-4.5A1.5 1.5 0 0 1 9 15.5V15"/></svg><span class="lbl">Conversación</span></button>
+  </nav>
+  <div class="top-actions">
+    <button class="install-btn" id="installBtn" aria-label="Instalar app" hidden><svg viewBox="0 0 24 24"><path d="M12 4v11M7.5 10.5L12 15l4.5-4.5M5 19h14"/></svg><span class="lbl">Instalar</span></button>
+    <span class="chip" id="backendChip" hidden></span>
+    <button class="top-btn" id="historyBtn" aria-label="Historial"><svg viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v4h4M12 7v5l3 2"/></svg><span class="lbl">Historial</span></button>
+    <button class="icon-btn" id="infoBtn" title="Información" aria-label="Información">
+      <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></svg>
+    </button>
+  </div>
+</header>
+
+<main class="wrap">
+  <div class="langbar">
+    <button class="lang-pill" id="srcLangBtn" aria-haspopup="dialog" aria-expanded="false"><span id="srcLangLabel">Detectar idioma</span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+    <button class="swap" id="swapBtn" title="Intercambiar idiomas" aria-label="Intercambiar idiomas">
+      <svg viewBox="0 0 24 24"><path d="M7 7h12l-3-3M17 17H5l3 3"/></svg>
+    </button>
+    <button class="lang-pill" id="tgtLangBtn" aria-haspopup="dialog" aria-expanded="false"><span id="tgtLangLabel">Inglés</span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+  </div>
+
+  <section class="panes">
+    <div class="pane src">
+      <textarea id="src" placeholder="Escribe o pega un texto" maxlength="5000" autofocus spellcheck="false"></textarea>
+      <button class="icon-btn clear" id="clearBtn" title="Borrar" aria-label="Borrar" hidden>
+        <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+      </button>
+      <div class="pane-foot">
+        <div class="tools">
+          <button class="icon-btn" id="micBtn" data-tip="Dictar" aria-label="Dictar"><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+          <button class="icon-btn" id="speakSrcBtn" data-tip="Escuchar" aria-label="Escuchar"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
+          <button class="icon-btn" id="copySrcBtn" data-tip="Copiar" aria-label="Copiar texto" disabled><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="ok-icon" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+        </div>
+        <span class="count zero" id="count">0 / 5000</span>
+      </div>
+    </div>
+
+    <div class="pane out">
+      <div id="out" class="output" aria-live="polite"><span class="placeholder">Traducción</span></div>
+
+      <div class="model-card" id="modelCard" hidden>
+        <div class="mc-icon"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M4 19h16"/></svg></div>
+        <h2>Descarga el traductor una sola vez</h2>
+        <p>Son unos 1,1 GB y se descargan solo esta vez: queda guardado en tu dispositivo. Después traduce sin internet y sin enviar tus textos a ningún servidor.</p>
+        <p class="hint" id="memHint" hidden>Tu dispositivo tiene poca memoria. Puede que vaya lento o que el navegador lo cierre.</p>
+        <button class="primary" id="loadBtn">Descargar y empezar</button>
+        <p class="tiny">Mejor con wifi. Funciona mejor en Chrome o Edge.</p>
+      </div>
+
+      <div class="loading" id="loadingBox" hidden>
+        <div class="ring"></div>
+        <p id="loadingText">Descargando modelo…</p>
+        <div class="bar"><div id="bar"></div></div>
+        <p class="tiny" id="loadingSub"></p>
+      </div>
+
+      <div class="pane-foot">
+        <div class="tools">
+          <button class="icon-btn" id="speakOutBtn" data-tip="Escuchar" aria-label="Escuchar traducción"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg></button>
+          <button class="icon-btn" id="copyBtn" data-tip="Copiar" aria-label="Copiar traducción"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2.5"/><path d="M5 15V6a2 2 0 0 1 2-2h8"/></svg><svg class="ok-icon" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg></button>
+          <button class="icon-btn" id="shareBtn" data-tip="Compartir" aria-label="Compartir traducción" hidden><svg viewBox="0 0 24 24"><path d="M12 3v12M8 7l4-4 4 4M5 13v6h14v-6"/></svg></button>
+        </div>
+        <div class="status" id="status"></div>
+        <button class="stop" id="stopBtn" hidden>Detener</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="docs" id="docsPane" hidden>
+    <label class="drop" id="drop">
+      <input type="file" id="docInput" accept=".pdf,.docx,.pptx,.xlsx,.md,.markdown,.txt,.srt,.vtt" hidden>
+      <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 18v-6M9 15l3-3 3 3"/></svg></div>
+      <strong>Elige un documento</strong>
+      <span>o arrástralo aquí</span>
+      <div class="fmt-chips"><span style="--fc:#d93025">PDF</span><span style="--fc:#2b579a">Word</span><span style="--fc:#c43e1c">PowerPoint</span><span style="--fc:#217346">Excel</span><span style="--fc:#4a4a4a">Markdown</span><span style="--fc:#6b6b6b">TXT</span><span style="--fc:#6b6b6b">SRT</span></div>
+      <span class="tiny">Se mantienen el formato, las tablas, las diapositivas y las imágenes. Nada sale de tu dispositivo.</span>
+    </label>
+
+    <details class="gloss" id="gloss">
+      <summary><svg viewBox="0 0 24 24"><path d="M4 5h11a3 3 0 0 1 3 3v11H7a3 3 0 0 1-3-3z"/><path d="M8 9h6M8 13h4"/></svg><span>Glosario</span><em id="glossCount"></em><svg class="chev" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></svg></summary>
+      <p class="gloss-hint" id="glossHint"></p>
+      <ul class="gloss-list" id="glossList"></ul>
+      <form class="gloss-add" id="glossAdd" autocomplete="off">
+        <input id="glossFrom" placeholder="Término" maxlength="60" required>
+        <span aria-hidden="true">→</span>
+        <input id="glossTo" placeholder="Traducción" maxlength="60" required>
+        <button type="submit" aria-label="Añadir término"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></button>
+      </form>
+    </details>
+
+    <div class="doc-card" id="docCard" hidden>
+      <div class="doc-head">
+        <div class="doc-file" id="docIcon"><svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg></div>
+        <div class="doc-info"><div class="doc-name" id="docName"></div><div class="doc-meta" id="docMeta"></div></div>
+        <button class="icon-btn" id="docRemove" title="Quitar documento" aria-label="Quitar documento"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="doc-progress" id="docProgress" hidden>
+        <div class="bar"><div id="docBar"></div></div>
+        <div class="doc-status"><span id="docStatus"></span><span id="docEta"></span></div>
+      </div>
+      <div class="doc-preview" id="docPreview" hidden></div>
+      <div class="doc-actions">
+        <button class="primary" id="docTranslate">Traducir documento</button>
+        <button class="secondary" id="docStop" hidden>Detener</button>
+        <button class="primary" id="docDownload" hidden>Descargar</button>
+        <button class="secondary" id="docShare" hidden>Compartir</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="cam" id="camPane" hidden>
+    <input type="file" id="camInput" accept="image/*" capture="environment" hidden>
+    <input type="file" id="imgInput" accept="image/*" hidden>
+    <div class="drop cam-start" id="camStart">
+      <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M4 8a2 2 0 0 1 2-2h2l1.5-2h5L16 6h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><circle cx="12" cy="12.5" r="3.5"/></svg></div>
+      <strong>Traduce lo que ves</strong>
+      <span>Haz una foto a un cartel, una carta o un menú</span>
+      <div class="cam-btns"><button class="primary" id="camShoot">Hacer foto</button><button class="secondary" id="camPick">Subir imagen</button></div>
+      <span class="tiny">La foto no sale de tu dispositivo. La primera vez se descarga el lector de texto de ese idioma (unos MB).</span>
+    </div>
+    <div class="doc-card cam-card" id="camCard" hidden>
+      <div class="cam-stage"><canvas id="camCanvas"></canvas>
+        <div class="cam-view" id="camView" hidden><button data-v="tr" class="sel">Traducción</button><button data-v="orig">Original</button></div>
+      </div>
+      <div class="doc-progress" id="camProgress">
+        <div class="bar"><div id="camBar"></div></div>
+        <div class="doc-status"><span id="camStatus"></span><span id="camEta"></span></div>
+      </div>
+      <div class="cam-texts" id="camTexts" hidden></div>
+      <div class="doc-actions">
+        <button class="secondary" id="camStop" hidden>Detener</button>
+        <button class="primary" id="camDownload" hidden>Guardar imagen</button>
+        <button class="secondary" id="camShare" hidden>Compartir</button>
+        <button class="secondary" id="camCopy" hidden>Copiar texto</button>
+        <button class="secondary" id="camRedo" hidden>Repetir</button>
+        <button class="secondary" id="camNew">Otra foto</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="talk" id="talkPane" hidden>
+    <div class="talk-list" id="talkList" aria-live="polite">
+      <div class="talk-empty" id="talkEmpty">
+        <div class="drop-icon"><svg viewBox="0 0 24 24"><path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h8A1.5 1.5 0 0 1 15 5.5v5a1.5 1.5 0 0 1-1.5 1.5H9l-3 2.5V12h-.5A1.5 1.5 0 0 1 4 10.5z"/><path d="M18 9h.5A1.5 1.5 0 0 1 20 10.5v5a1.5 1.5 0 0 1-1.5 1.5H18v2.5L15 17h-4.5A1.5 1.5 0 0 1 9 15.5V15"/></svg></div>
+        <strong>Habla y te traduzco</strong>
+        <span>Toca el micrófono una vez y hablad por turnos. Sé quién habla, noto cuándo termina y lo traduzco en voz alta.</span>
+        <span class="tiny" id="talkNote">Todo pasa en tu dispositivo: la voz, el idioma y la traducción.</span>
+      </div>
+    </div>
+    <div class="talk-bar">
+      <div class="talk-langs">
+        <button class="talk-lang" id="talkLangA" data-side="a" aria-haspopup="dialog"><span></span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+        <button class="icon-btn talk-swap" id="talkSwapBtn" aria-label="Intercambiar idiomas"><svg viewBox="0 0 24 24"><path d="M7 7h11l-3-3M17 17H6l3 3"/></svg></button>
+        <button class="talk-lang" id="talkLangB" data-side="b" aria-haspopup="dialog"><span></span><svg viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></button>
+      </div>
+      <div class="talk-row">
+        <div class="talk-tools l">
+          <button class="icon-btn" id="talkClearBtn" data-tip="Nueva conversación" aria-label="Nueva conversación" disabled><svg viewBox="0 0 24 24"><path d="M5 7h14M10 11v6M14 11v6M6.5 7l1 12a1.5 1.5 0 0 0 1.5 1.4h6a1.5 1.5 0 0 0 1.5-1.4l1-12M9.5 7V4.5h5V7"/></svg></button>
+          <button class="icon-btn" id="talkVoiceBtn" data-tip="Voz activada" aria-label="Leer en voz alta" aria-pressed="true"><svg viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zM16.5 8.5a5 5 0 0 1 0 7M19 6a8.5 8.5 0 0 1 0 12"/></svg><svg class="off-icon" viewBox="0 0 24 24"><path d="M4 9v6h4l5 4V5L8 9H4zM17 9.5l5 5M22 9.5l-5 5"/></svg></button>
+        </div>
+        <button class="talk-mic" id="talkMic" aria-label="Empezar a escuchar" aria-pressed="false"><span class="mic-halo" aria-hidden="true"></span><span class="mic-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span><svg viewBox="0 0 24 24"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button>
+        <div class="talk-tools r">
+          <button class="icon-btn" id="talkLayaBtn" data-tip="Fin de turno con IA" aria-label="Detectar el fin de turno con IA (Laya)" aria-pressed="false"><svg class="lring" viewBox="0 0 44 44" aria-hidden="true"><circle class="ltrk" cx="22" cy="22" r="20.5"/><circle class="lbar" cx="22" cy="22" r="20.5" pathLength="100"/></svg><svg class="spark" viewBox="0 0 24 24"><path d="M12 3.5l1.6 4.4 4.4 1.6-4.4 1.6L12 15.5l-1.6-4.4L6 9.5l4.4-1.6zM18.5 15l.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8z"/></svg></button>
+        </div>
+      </div>
+      <p class="talk-status" id="talkStatus" aria-live="polite"></p>
+    </div>
+  </section>
+
+  <p class="foot-note">Funciona con <a href="https://github.com/Tencent-Hunyuan/Hy-MT2" target="_blank" rel="noopener">Hy-MT2 1.8B</a> de Tencent, dentro de tu navegador. Nada de lo que escribes sale de tu dispositivo.</p>
+</main>
+<div class="ios-hint" id="iosHint" hidden>
+  <p>Para instalarla en tu iPhone: toca <b>Compartir</b> y luego <b>Añadir a pantalla de inicio</b>.</p>
+  <button class="icon-btn" id="iosHintClose" aria-label="Cerrar"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+</div>
+
+<!-- Selector de idioma -->
+<div class="sheet-backdrop" id="sheet" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle">
+    <div class="sheet-head">
+      <div class="grabber"></div>
+      <h3 id="sheetTitle">Traducir a</h3>
+      <div class="search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M20 20l-3.5-3.5"/></svg><input id="sheetSearch" placeholder="Buscar idioma" autocomplete="off"></div>
+    </div>
+    <div class="sheet-list" id="sheetList"></div>
+  </div>
+</div>
+
+<!-- Historial -->
+<div class="sheet-backdrop" id="historySheet" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="histTitle">
+    <div class="sheet-head">
+      <div class="grabber"></div>
+      <div class="row"><h3 id="histTitle">Historial</h3><button class="link" id="clearHistory">Borrar todo</button></div>
+    </div>
+    <div class="sheet-list" id="historyList"></div>
+  </div>
+</div>
+
+<!-- Información -->
+<div class="sheet-backdrop" id="infoSheet" hidden>
+  <div class="sheet" role="dialog" aria-modal="true" aria-labelledby="infoTitle">
+    <div class="sheet-head"><div class="grabber"></div><h3 id="infoTitle">Sobre el traductor</h3></div>
+    <div class="info-body">
+      <dl>
+        <div><dt>Modelo</dt><dd>Hy-MT2 1.8B (Q4_K_M, 1,1 GB)</dd></div>
+        <div><dt>Lector</dt><dd>Indra OCR (Tesseract de reserva)</dd></div>
+        <div><dt>Guardado</dt><dd id="infoStorage">Sin descargar</dd></div>
+        <div><dt>Idiomas</dt><dd>33 idiomas y 5 variantes</dd></div>
+        <div><dt>Motor</dt><dd id="infoBackend">Sin cargar</dd></div>
+        <div class="engine"><dt>Usar</dt><dd><div class="seg" id="engineSeg"><button data-engine="auto">Auto</button><button data-engine="cpu">Procesador</button><button data-engine="gpu">GPU</button></div></dd></div>
+        <div><dt>Privacidad</dt><dd>Todo se procesa en tu dispositivo</dd></div>
+      </dl>
+      <p class="tiny">Atajo: Ctrl + Enter para traducir al momento.</p>
+      <button class="danger" id="deleteModel">Borrar el modelo de este dispositivo</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+<script type="module" src="app.js?v=30"></script>
+  <div class="img-viewer" id="imgViewer" hidden role="dialog" aria-modal="true" aria-label="Imagen ampliada">
+    <div class="iv-head"><button class="iv-close" id="ivClose" type="button">Cerrar<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="iv-body"><img id="ivImg" alt="Foto ampliada con la traducción" draggable="false"></div>
+  </div>
+</body>
+</html>
