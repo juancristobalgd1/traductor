@@ -2266,7 +2266,8 @@ async function loadImage(file) {
 
 function sampleColors(img, bb) {
   const W = img.width, H = img.height, d = img.data;
-  const px = (x, y) => { const i = (y * W + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
+  const probe = W + 'x' + H + ' len ' + (d ? d.length : 'NODATA') + ' p ' + (d ? d[((Math.max(0, bb.y0 | 0)) * W + Math.max(0, bb.x0 | 0)) * 4] : '-');
+  const px = (x, y) => { x = x | 0; y = y | 0; if (!d || x < 0 || y < 0 || x >= W || y >= H) return [255, 255, 255]; const i = (y * W + x) * 4; return [d[i], d[i + 1], d[i + 2]]; };
   const X0 = Math.max(0, bb.x0), X1 = Math.min(W - 1, bb.x1), Y0 = Math.max(0, bb.y0), Y1 = Math.min(H - 1, bb.y1);
   const ring = [], step = Math.max(1, Math.round((X1 - X0 + Y1 - Y0) / 200));
   for (let x = X0; x <= X1; x += step) for (const y of [Y0 - 3, Y1 + 3]) if (y >= 0 && y < H) ring.push(px(x, y));
@@ -2283,7 +2284,7 @@ function sampleColors(img, bb) {
   const lum = c => 0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2];
   let color = strong.length ? [0, 1, 2].map(k => Math.round(strong.reduce((a, [p]) => a + p[k], 0) / strong.length)) : null;
   if (!color || Math.abs(lum(color) - lum(bg)) < 60) color = lum(bg) > 128 ? [17, 17, 17] : [255, 255, 255];
-  return { bg, color };
+  return { bg, color, probe };
 }
 
 function ocrBlocks(data, img) {
@@ -2357,7 +2358,7 @@ function renderCam() {
   const safe = a => Array.isArray(a) && a.length === 3 && a.every(n => n >= 0 && n <= 255) ? a : null;
   const info = [];
   for (const b of camState.blocks) {
-    const row = { x0: Math.round(b.bb.x0), y0: Math.round(b.bb.y0), x1: Math.round(b.bb.x1), y1: Math.round(b.bb.y1), lh: Math.round((b.lineH || 0) * 10) / 10, st: Math.round((b.step || 0) * 10) / 10, tr: (b.tr || '').length, bg: b.bg && b.bg.map(n => Math.round(n)), col: b.color && b.color.map(n => Math.round(n)), txt: (b.tr || '').slice(0, 30) };
+    const row = { x0: Math.round(b.bb.x0), y0: Math.round(b.bb.y0), x1: Math.round(b.bb.x1), y1: Math.round(b.bb.y1), lh: Math.round((b.lineH || 0) * 10) / 10, st: Math.round((b.step || 0) * 10) / 10, tr: (b.tr || '').length, bg: b.bg && b.bg.map(n => Math.round(n)), col: b.color && b.color.map(n => Math.round(n)), probe: b.probe, txt: (b.tr || '').slice(0, 30) };
     info.push(row);
     if (!b.tr) { row.skip = 'sin_tr'; continue; }
     const pad = Math.max(2, b.lineH * 0.15);
