@@ -1,7 +1,7 @@
 // Web worker: loads the models once and OCRs grayscale pages posted to it,
 // so the page stays responsive while ONNX Runtime runs.
 const post = (p) => self.postMessage({ type: "progress", name: "boot", ...p });
-post({ state: "boot", isolated: !!self.crossOriginIsolated, cores: navigator.hardwareConcurrency || 1 });
+post({ state: "boot", v: "w46", isolated: !!self.crossOriginIsolated, cores: navigator.hardwareConcurrency || 1 });
 
 let ort, IndraOCR, cachedLoader;
 try {

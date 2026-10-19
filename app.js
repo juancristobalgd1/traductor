@@ -2417,7 +2417,7 @@ async function getIndra() {
   indraW = new Indra({
     onProgress: p => {
       tick();
-      if (p.state === 'boot') { dbg(`boot aislado=${p.isolated} núcleos=${p.cores}`); console.log('lector: boot, aislado:', p.isolated, 'núcleos:', p.cores); cel.status.textContent = 'Arrancando el lector…'; }
+      if (p.state === 'boot') { dbg(`boot ${p.v || '?'} aislado=${p.isolated} núcleos=${p.cores}`); console.log('lector: boot', p.v || '?', 'aislado:', p.isolated, 'núcleos:', p.cores); cel.status.textContent = 'Arrancando el lector…'; }
       else if (p.state === 'ort' || p.state === 'modules') { dbg('cargando runtime'); cel.status.textContent = 'Cargando el lector…'; }
       else if (p.state === 'boot-error') { dbg('boot-error: ' + p.message); console.error('arranque del lector:', p.message); boomNo(new Error(p.message || 'error de arranque')); }
       else if (p.state === 'progress') {

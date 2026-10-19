@@ -1,6 +1,6 @@
 // Service worker: guarda la app para usarla sin conexión y añade las cabeceras
 // COOP/COEP para que el navegador permita usar varios hilos (más velocidad).
-const VERSION = 'traductor-v45';
+const VERSION = 'traductor-v46';
 const SHELL = ['./', './index.html', './style.css', './app.js', './manifest.webmanifest', './icon-v2.svg', './icons/icon-192-v2.png', './icons/icon-512-v2.png', './icons/maskable-192-v2.png', './icons/maskable-512-v2.png', './icons/apple-touch-icon-v2.png',
   './vendor/wllama/index.js', './vendor/jszip/jszip.min.js', './vendor/wllama/wllama.wasm', './listen.js'];
 
@@ -26,6 +26,7 @@ self.addEventListener('fetch', e => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== location.origin) return; // nada externo debería quedar, pero por si acaso
+  if (url.pathname.includes('/vendor/indra/')) return e.respondWith(fetch(req, { cache: 'no-store' }).then(isolate).catch(() => Response.error())); // el lector cambia entre versiones: nunca de caché
   if (url.pathname.includes('/models/')) return; // los modelos van vendidos en el repo: descarga directa
   e.respondWith((async () => {
     const cache = await caches.open(VERSION);
