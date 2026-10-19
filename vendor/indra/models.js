@@ -20,6 +20,22 @@ export function cachedLoader({ base, cacheName = `indra-ocr-${HF_REVISION}`, onP
       onProgress?.({ name, state: "download" });
       res = await fetch(url);
       if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`);
+      const total = +res.headers.get("content-length") || 0;
+      if (res.body && total) {
+        const reader = res.body.getReader(), parts = [];
+        let loaded = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          parts.push(value); loaded += value.length;
+          onProgress?.({ name, state: "progress", loaded, total });
+        }
+        const buf = new Uint8Array(loaded);
+        let off = 0; for (const c of parts) { buf.set(c, off); off += c.length; }
+        if (cache) await cache.put(url, new Response(buf, { headers: res.headers })).catch(() => {});
+        onProgress?.({ name, state: "ready" });
+        return name.endsWith(".json") ? new TextDecoder().decode(buf) : buf;
+      }
       if (cache) await cache.put(url, res.clone()).catch(() => {});
     }
     onProgress?.({ name, state: "ready" });

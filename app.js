@@ -2400,8 +2400,20 @@ async function getIndra() {
   if (indraW) return indraW;
   cel.status.textContent = 'Descargando el lector de texto…'; setCamBar(0);
   const { Indra } = await import('./vendor/indra/indra.js');
-  indraW = new Indra({ onProgress: () => { cel.status.textContent = 'Descargando el lector de texto…'; } });
-  await indraW.ready;
+  let last = 0; // si el lector no da señal en 90 s, lo doy por muerto y sigo con Tesseract
+  const tick = () => { last = Date.now(); };
+  const dead = new Promise((_, no) => setTimeout(() => { if (!last || Date.now() - last > 89000) no(new Error('el lector no responde')); }, 90000));
+  indraW = new Indra({
+    onProgress: p => {
+      tick();
+      if (p.state === 'progress') {
+        cel.status.textContent = `Descargando el lector de texto… ${(p.loaded / 1e6).toFixed(0)} de ~${Math.round(p.total / 1e6)} MB`;
+        setCamBar(Math.min(30, p.loaded / p.total * 30));
+      } else if (p.state === 'ready') setCamBar(30);
+    },
+  });
+  await Promise.race([indraW.ready, dead]);
+  tick();
   return indraW;
 }
 function grayOf(c) {
@@ -2431,28 +2443,37 @@ async function tesseractOcr(chosen, fbLang) {
   camState.ocrSrc = state.src; camState.lang = lang;
   return blocks;
 }
-async function camOcr() {
+const stopErr = () => new DOMException('aborted', 'AbortError');
+async function camOcr(ctrl) {
   const src = camState.src;
   const img = src.getContext('2d').getImageData(0, 0, src.width, src.height);
   const chosen = state.src !== 'auto' ? state.src : null;
-  if (chosen && !INDRA_LANGS.has(chosen)) return tesseractOcr(chosen, null);
+  // "Detener" debe cortar también mientras descarga o lee, no solo entre pasos.
+  const stopP = new Promise((_, no) => ctrl.signal.addEventListener('abort', () => no(stopErr()), { once: true }));
+  const kill = () => { // termina el lector por dentro: la descarga y la lectura se cortan al momento
+    if (indraW) { try { indraW.worker.terminate(); } catch {} indraW = null; }
+    if (tess) { try { tess.terminate(); } catch {} tess = null; }
+  };
+  const guard = p => Promise.race([p, stopP]).catch(e => { if (e?.name === 'AbortError') kill(); throw e; });
+  if (chosen && !INDRA_LANGS.has(chosen)) return guard(tesseractOcr(chosen, null));
   let lang = chosen;
   try {
-    const w = await getIndra();
+    const w = await guard(getIndra());
     cel.status.textContent = 'Leyendo el texto…'; setCamBar(30);
-    const page = await w.page(grayOf(src), { turn: true, tables: false });
+    const page = await guard(w.page(grayOf(src), { turn: true, tables: false }));
     setCamBar(100);
     // Adapto las líneas de Indra a la misma forma que usa Tesseract para reaprovechar el agrupado.
     const flat = page.lines.filter(l => l.text.trim() && l.conf > 0.3)
       .map(l => ({ text: l.text, confidence: l.conf * 100, bbox: { x0: l.box[0], y0: l.box[1], x1: l.box[2], y1: l.box[3] } }));
     const blocks = ocrBlocks({ blocks: [{ paragraphs: [{ lines: flat }] }] }, img);
     if (!chosen) lang = detect(blocks.map(b => b.text).join('\n'));
-    if (lang && !INDRA_LANGS.has(lang) && TESS[lang]) return tesseractOcr(null, lang);
+    if (lang && !INDRA_LANGS.has(lang) && TESS[lang]) return guard(tesseractOcr(null, lang));
     camState.ocrSrc = state.src; camState.lang = lang;
     return blocks;
   } catch (e) {
+    if (e?.name === 'AbortError') throw e;
     console.warn('Indra no pudo leer la foto, repito con Tesseract', e);
-    return tesseractOcr(null, lang && TESS[lang] ? lang : null);
+    return guard(tesseractOcr(null, lang && TESS[lang] ? lang : null));
   }
 }
 
@@ -2464,7 +2485,7 @@ async function camRun(ocr) {
   let lock = null; try { lock = await navigator.wakeLock?.request('screen'); } catch {}
   try {
     if (ocr || !camState.blocks.length || (state.src !== 'auto' && state.src !== camState.ocrSrc)) {
-      camState.blocks = await camOcr();
+      camState.blocks = await camOcr(ctrl);
       if (ctrl.signal.aborted) throw new DOMException('aborted', 'AbortError');
       state.detected = camState.lang; renderLangs();
       if (!camState.blocks.length) {
