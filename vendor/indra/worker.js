@@ -15,9 +15,10 @@ try {
   throw e;
 }
 
-ort.env.wasm.wasmPaths = new URL("../../ort/", self.location.href).href;
+ort.env.wasm.wasmPaths = new URL("../ort/", self.location.href).href;
 // Threads need a cross-origin isolated page; elsewhere ONNX Runtime runs single-threaded.
 ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
+post({ state: "config", threads: ort.env.wasm.numThreads, wasmPaths: ort.env.wasm.wasmPaths });
 
 self.addEventListener("error", (e) => post({ state: "boot-error", message: String(e.message || e) }));
 self.addEventListener("unhandledrejection", (e) => post({ state: "boot-error", message: String(e.reason?.message ?? e.reason) }));
@@ -27,9 +28,15 @@ let ready = null;
 self.onmessage = async ({ data: msg }) => {
   try {
     if (msg.type === "init") {
-      const load = cachedLoader({ base: msg.modelBase, onProgress: (p) => self.postMessage({ type: "progress", ...p }) });
+      post({ state: "init" });
+      const load = cachedLoader({
+        base: msg.modelBase,
+        onProgress: (p) => self.postMessage({ type: "progress", ...p }),
+        log: (m) => post({ state: "note", message: m }),
+      });
       ready ??= IndraOCR.create(ort, load, { furniture: !!msg.furniture });
       await ready;
+      post({ state: "ready" });
       self.postMessage({ type: "ready", id: msg.id });
     } else if (msg.type === "page") {
       const ocr = await ready;

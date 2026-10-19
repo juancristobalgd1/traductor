@@ -13,9 +13,11 @@ export const modelUrl = (name, base = `https://huggingface.co/${HF_REPO}/resolve
 export function cachedLoader({ base, cacheName = `indra-ocr-${HF_REVISION}`, onProgress } = {}) {
   return async (name) => {
     const url = modelUrl(name, base);
+    onProgress?.({ name, state: "ask" });
     let res;
     const cache = typeof caches !== "undefined" ? await caches.open(cacheName).catch(() => null) : null;
     if (cache) res = await cache.match(url);
+    onProgress?.({ name, state: cache && res ? "hit" : "miss" });
     if (!res) {
       onProgress?.({ name, state: "download" });
       res = await fetch(url);
