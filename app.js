@@ -2469,10 +2469,13 @@ async function camOcr(ctrl) {
     if (!chosen) lang = detect(blocks.map(b => b.text).join('\n'));
     if (lang && !INDRA_LANGS.has(lang) && TESS[lang]) return guard(tesseractOcr(null, lang));
     camState.ocrSrc = state.src; camState.lang = lang;
+    const ms = page.timings?.total_ms;
+    if (ms) toast(`Leído con el lector rápido en ${(ms / 1000).toFixed(1)} s`);
     return blocks;
   } catch (e) {
     if (e?.name === 'AbortError') throw e;
     console.warn('Indra no pudo leer la foto, repito con Tesseract', e);
+    toast('El lector rápido no ha cargado, uso el lector de reserva');
     return guard(tesseractOcr(null, lang && TESS[lang] ? lang : null));
   }
 }
