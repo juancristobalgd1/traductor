@@ -2408,9 +2408,9 @@ async function getIndra() {
   if (indraW) return indraW;
   cel.status.textContent = 'Descargando el lector de texto…'; setCamBar(0);
   const { Indra } = await import('./vendor/indra/indra.js');
-  let last = 0; // si el lector no da señal en 90 s, lo doy por muerto y sigo con Tesseract
+  let last = Date.now(); // si el lector no da señal en 90 s, lo doy por muerto y sigo con Tesseract
   const tick = () => { last = Date.now(); };
-  const dead = new Promise((_, no) => setTimeout(() => { if (!last || Date.now() - last > 89000) no(new Error('el lector no responde')); }, 90000));
+  const dead = new Promise((_, no) => { const iv = setInterval(() => { if (Date.now() - last > 90000) { clearInterval(iv); no(new Error('el lector no responde')); } }, 5000); });
   let boomNo;
   const boom = new Promise((_, no) => { boomNo = no; });
   indraDied = new Promise((_, no) => { indraDiedNo = no; });
@@ -2433,8 +2433,9 @@ async function getIndra() {
     if (indraDiedNo) indraDiedNo(new Error('el lector ha muerto')); else boomNo(new Error(msg));
   });
   indraW.worker.addEventListener('messageerror', () => boomNo(new Error('el lector no arrancó: mensaje ilegal')));
-  await Promise.race([indraW.ready, dead, boom]);
+  await Promise.race([indraW.ready, dead, boom, indraDied]);
   boom.catch(() => {});
+  indraDied.catch(() => {});
   tick();
   return indraW;
 }

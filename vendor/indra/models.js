@@ -7,7 +7,9 @@ export const MODEL_FILES = [
   "meta.json", "det.onnx", "rec.onnx", "order.onnx", "orient.onnx", "script.onnx", "rec_cjk.onnx",
 ];
 
-export const modelUrl = (name, base = `https://huggingface.co/${HF_REPO}/resolve/${HF_REVISION}/`) => base + name;
+// Los modelos van vendidos en el repo (models/): nada se descarga de Hugging Face.
+export const LOCAL_BASE = new URL("../../../models/", import.meta.url).href;
+export const modelUrl = (name, base = LOCAL_BASE) => base + name;
 
 /** A loader for IndraOCR.create: cached fetch, bytes for .onnx, text for .json. */
 export function cachedLoader({ base, cacheName = `indra-ocr-${HF_REVISION}`, onProgress } = {}) {
