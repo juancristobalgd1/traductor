@@ -1,7 +1,7 @@
 // Web worker: loads the models once and OCRs grayscale pages posted to it,
 // so the page stays responsive while ONNX Runtime runs.
 const post = (p) => self.postMessage({ type: "progress", name: "boot", ...p });
-post({ state: "boot", v: "w47", isolated: !!self.crossOriginIsolated, cores: navigator.hardwareConcurrency || 1 });
+post({ state: "boot", v: "w49", isolated: !!self.crossOriginIsolated, cores: navigator.hardwareConcurrency || 1 });
 // Los mensajes que llegan mientras el módulo aún se importa se guardan y se
 // reprocesan al terminar: el arranque ("init") llega antes de que el receptor esté montado.
 const tempranos = [];
@@ -11,8 +11,8 @@ let ort, IndraOCR, cachedLoader;
 try {
   ort = await import("../ort/ort.wasm.min.mjs");
   post({ state: "ort" });
-  ({ IndraOCR } = await import("./pipeline.js"));
-  ({ cachedLoader } = await import("./models.js"));
+  ({ IndraOCR } = await import("./pipeline.js?r=49"));
+  ({ cachedLoader } = await import("./models.js?r=49"));
   post({ state: "modules" });
 } catch (e) {
   post({ state: "boot-error", message: String(e?.message ?? e) });

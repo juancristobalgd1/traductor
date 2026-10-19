@@ -2415,7 +2415,7 @@ async function getIndra() {
   const boom = new Promise((_, no) => { boomNo = no; });
   indraDied = new Promise((_, no) => { indraDiedNo = no; });
   indraW = new Indra({
-    workerUrl: './vendor/indra/worker.js?r=48', // evita copias viejas del lector en cachés intermedias
+    workerUrl: './vendor/indra/worker.js?r=49', // evita copias viejas del lector en cachés intermedias
     onProgress: p => {
       tick();
       if (p.state === 'boot') { dbg(`boot ${p.v || '?'} aislado=${p.isolated} núcleos=${p.cores}`); console.log('lector: boot', p.v || '?', 'aislado:', p.isolated, 'núcleos:', p.cores); cel.status.textContent = 'Arrancando el lector…'; }
