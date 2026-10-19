@@ -2405,7 +2405,6 @@ async function getIndra() {
   const dead = new Promise((_, no) => setTimeout(() => { if (!last || Date.now() - last > 89000) no(new Error('el lector no responde')); }, 90000));
   let boomNo;
   const boom = new Promise((_, no) => { boomNo = no; });
-  indraW.worker.addEventListener('error', e => boomNo(new Error('el lector no arrancó: ' + (e.message || e))));
   indraW = new Indra({
     onProgress: p => {
       tick();
@@ -2418,6 +2417,7 @@ async function getIndra() {
       } else if (p.state === 'ready') setCamBar(30);
     },
   });
+  indraW.worker.addEventListener('error', e => boomNo(new Error('el lector no arrancó: ' + (e.message || e))));
   await Promise.race([indraW.ready, dead, boom]);
   tick();
   return indraW;
