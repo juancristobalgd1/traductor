@@ -5,7 +5,7 @@ post({ state: "boot", isolated: !!self.crossOriginIsolated, cores: navigator.har
 
 let ort, IndraOCR, cachedLoader;
 try {
-  ort = await import("../../ort/ort.wasm.min.mjs");
+  ort = await import("../ort/ort.wasm.min.mjs");
   post({ state: "ort" });
   ({ IndraOCR } = await import("./pipeline.js"));
   ({ cachedLoader } = await import("./models.js"));
