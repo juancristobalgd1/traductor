@@ -1728,6 +1728,8 @@ const stripFence = s => s.replace(/^```[a-z]*\n([\s\S]*?)\n```$/i, '$1').trim();
 // traducción encima con pdf-lib, ajustando el tamaño para que quepa.
 FORMATS.pdf = { name: 'PDF', color: '#d93025', mime: 'application/pdf', kind: 'pdf', unit: 'bloques' };
 const PDF_CJK = { zh: 'SC', yue: 'SC', 'zh-Hant': 'TC', ja: 'JP', ko: 'KR' };
+const SERIF_FONT = /serif|times|tinos|nimbus ?roman|georgia|garamond|cambria|charter|minion|caslon|palatino|baskerville|merriweather|gentium|constantia|utopia|schoolbook|latin ?modern|computer ?modern|lora|crimson|playfair|bookman|book ?antiqua/i;
+const serifish = f => !!f && !/sans|mono|narrow|consol/i.test(f) && (SERIF_FONT.test(f) || /(^|\W)serif(\W|$)/i.test(f));
 const PDF_COMPLEX = new Set(['ar', 'he', 'fa', 'ur', 'hi', 'mr', 'gu', 'bn', 'ta', 'te', 'th', 'km', 'my', 'bo', 'ug']);
 const loadScript = src => new Promise((ok, ko) => { const sc = document.createElement('script'); sc.src = src; sc.onload = ok; sc.onerror = ko; document.head.appendChild(sc); });
 let pdfjsP, pdflibP;
@@ -1782,12 +1784,13 @@ async function analyzePdf(file, onProgress) {
         if (gap > ln.size * 0.12 && !/\s$/.test(ln.text) && !/^\s/.test(it.str)) ln.text += ' ';
         ln.text += it.str; ln.x1 = Math.max(ln.x1, it.x + it.w); ln.chars += it.str.length;
         if (it.bold) ln.boldChars += it.str.length; if (it.italic) ln.italicChars += it.str.length;
+      if (serifish(fname)) ln.serifChars += it.str.length;
       } else if (it.str.trim()) {
-        lines.push({ text: it.str, x0: it.x, x1: it.x + it.w, y: it.y, size: it.size, chars: it.str.length,
+        lines.push({ text: it.str, x0: it.x, x1: it.x + it.w, y: it.y, size: it.size, chars: it.str.length, serifChars: serifish(fname) ? it.str.length : 0,
           boldChars: it.bold ? it.str.length : 0, italicChars: it.italic ? it.str.length : 0 });
       }
     }
-    lines.forEach(l => { l.text = l.text.replace(/\s+/g, ' ').trim(); l.bold = l.boldChars > l.chars / 2; l.italic = l.italicChars > l.chars / 2; });
+    lines.forEach(l => { l.text = l.text.replace(/\s+/g, ' ').trim(); l.bold = l.boldChars > l.chars / 2; l.italic = l.italicChars > l.chars / 2; l.serif = l.serifChars > l.chars / 2; });
     // Bloques
     lines.sort((p, q) => (q.y - p.y) || (p.x0 - q.x0));
     const pblocks = [];
@@ -1798,13 +1801,13 @@ async function analyzePdf(file, onProgress) {
         const last = bk.lines[bk.lines.length - 1];
         const dy = last.y - ln.y;
         return dy > ln.size * 0.6 && dy < Math.max(last.size, ln.size) * 1.9 && Math.abs(last.size - ln.size) < last.size * 0.15
-          && ln.x0 < bk.x1 && ln.x1 > bk.x0 && last.bold === ln.bold && (bk.lines.length < 2 || Math.abs(dy - bk.lineH) < ln.size * 0.35);
+          && Math.min(bk.x1, ln.x1) - Math.max(bk.x0, ln.x0) > ln.size && last.bold === ln.bold && (bk.lines.length < 2 || Math.abs(dy - bk.lineH) < ln.size * 0.35);
       });
       if (blk) {
         const last = blk.lines[blk.lines.length - 1];
         if (blk.lines.length === 1) blk.lineH = last.y - ln.y;
         blk.lines.push(ln); blk.x0 = Math.min(blk.x0, ln.x0); blk.x1 = Math.max(blk.x1, ln.x1);
-      } else pblocks.push({ page: n, lines: [ln], x0: ln.x0, x1: ln.x1, size: ln.size, lineH: ln.size * 1.2, bold: ln.bold, italic: ln.italic });
+      } else pblocks.push({ page: n, lines: [ln], x0: ln.x0, x1: ln.x1, size: ln.size, lineH: ln.size * 1.2, bold: ln.bold, italic: ln.italic, serif: ln.serif });
     }
     const toPx = (x, y) => vp.convertToViewportPoint(x, y).map(Math.round);
     for (const bk of pblocks) {
@@ -1816,7 +1819,12 @@ async function analyzePdf(file, onProgress) {
       const centered = ls.length > 1
         ? ls.every(l => Math.abs((l.x0 + l.x1) / 2 - mid) < Math.max(2, w * 0.04)) && ls.some(l => Math.abs(l.x0 - bk.x0) > bk.size * 0.5)
         : Math.abs(mid - (base.viewBox[0] + base.viewBox[2]) / 2) < base.width * 0.03 && w < base.width * 0.8;
-      bk.align = centered ? 'center' : 'left';
+      const maxX1 = Math.max(...ls.map(l => l.x1)), spread0 = Math.max(...ls.map(l => l.x0)) - Math.min(...ls.map(l => l.x0));
+    const right = ls.length > 1
+      ? ls.every(l => Math.abs(l.x1 - maxX1) < bk.size * 0.6) && spread0 > bk.size * 0.5
+      : bk.x1 > bk.pageR - bk.size * 7 && (bk.x1 - bk.x0) < bk.pageR * 0.6;
+    bk.align = centered ? 'center' : right ? 'right' : 'left';
+    bk.justify = bk.align === 'left' && ls.length > 1 && ls.slice(0, -1).every(l => l.x1 >= bk.x1 - bk.size * 0.5);
       bk.pageR = base.viewBox[2]; bk.single = ls.length === 1;
       // Colores leídos de la página dibujada: fondo alrededor del bloque y tinta dentro.
       const [ax, ay] = toPx(bk.x0, bk.top), [bx, by] = toPx(bk.x1, bk.bottom);
@@ -1863,15 +1871,16 @@ async function getFont(url) {
   if (!fontBytes.has(url)) fontBytes.set(url, fetch(url).then(r => { if (!r.ok) throw new Error('font'); return r.arrayBuffer(); }));
   return fontBytes.get(url);
 }
-async function pdfFonts(doc, tgt) {
+async function pdfFonts(doc, tgt, serif) {
   const cjk = PDF_CJK[tgt];
   if (cjk) {
-    const f = await doc.embedFont(await getFont(`https://cdn.jsdelivr.net/gh/notofonts/noto-cjk@f8d157532fbfaeda587e826d4cd5b21a49186f7c/Sans/SubsetOTF/${cjk}/NotoSans${cjk}-Regular.otf`), { subset: true });
+    const f = await doc.embedFont(await getFont(`fonts/noto-cjk/NotoSans${cjk}-Regular.otf`), { subset: true });
     return { r: f, cjk: true };
   }
   const out = {};
-  for (const [k, n] of [['r', 'Regular'], ['b', 'Bold'], ['i', 'Italic'], ['bi', 'BoldItalic']])
-    out[k] = await doc.embedFont(await getFont(`fonts/NotoSans-${n}.ttf`), { subset: true });
+  for (const [pre, fam] of serif ? [['', 'Sans'], ['s', 'Serif']] : [['', 'Sans']])
+    for (const [k, n] of [['r', 'Regular'], ['b', 'Bold'], ['i', 'Italic'], ['bi', 'BoldItalic']])
+      out[pre + k] = await doc.embedFont(await getFont(`fonts/Noto${fam}-${n}.ttf`), { subset: true });
   return out;
 }
 
@@ -1898,7 +1907,8 @@ async function buildPdf(an, units, tgt) {
   const { PDFLib, fontkit } = await loadPdfLib();
   const doc = await PDFLib.PDFDocument.load(an.bytes, { ignoreEncryption: true, updateMetadata: false });
   doc.registerFontkit(fontkit);
-  const fonts = await pdfFonts(doc, tgt);
+  const serif = units.some(u => u.pdf?.serif);
+  const fonts = await pdfFonts(doc, tgt, serif);
   const pages = doc.getPages();
   const rgb = c => PDFLib.rgb(c[0] / 255, c[1] / 255, c[2] / 255);
   const jobs = [];
@@ -1906,9 +1916,14 @@ async function buildPdf(an, units, tgt) {
     const bk = u.pdf;
     const text = u.obj.textContent.replace(/[\u0000-\u001f]/g, ' ').replace(/\s+/g, ' ').trim();
     if (!text || text === u.text) continue;
-    const font = fonts.cjk ? fonts.r : fonts[(bk.bold ? 'b' : '') + (bk.italic ? 'i' : '')] || fonts.r;
+    const fam = bk.serif ? 's' : '';
+    const font = fonts.cjk ? fonts.r : fonts[fam + (bk.bold ? 'b' : '') + (bk.italic ? 'i' : '')] || fonts[fam + 'r'];
     let w = Math.max(bk.x1 - bk.x0, bk.size * 2); const h = bk.top - bk.bottom;
-    if (bk.single && bk.align === 'left') w = Math.min(w * 1.25, bk.pageR - bk.x0 - 24); // una línea suelta puede crecer un poco
+    if (bk.single && bk.align === 'left') {
+      w = Math.min(w * 1.25, bk.pageR - bk.x0 - 24); // una línea suelta puede crecer un poco
+      const nb = an.blocks.filter(o => o !== bk && o.page === bk.page && o.x0 > bk.x1 - 2 && o.bottom < bk.top && o.top > bk.bottom).map(o => o.x0);
+      if (nb.length) w = Math.min(w, Math.min(...nb) - bk.x0 - 6);
+    }
     w = Math.max(w, bk.x1 - bk.x0);
     let size = bk.size, lines, lineH;
     for (;;) {
@@ -1923,10 +1938,25 @@ async function buildPdf(an, units, tgt) {
   for (const j of jobs) j.page.drawRectangle({ x: j.bk.x0 - 1.5, y: j.bk.bottom - 1, width: Math.max(j.bk.x1 - j.bk.x0, j.bk.align === 'left' ? Math.max(...j.lines.map(l => j.font.widthOfTextAtSize(l, j.size))) : 0) + 3, height: j.bk.top - j.bk.bottom + 2, color: rgb(j.bk.bg) });
   for (const j of jobs) {
     const y0 = j.bk.top - j.size * 0.86;
+    const full = j.bk.align === 'left' ? Math.max(j.bk.x1 - j.bk.x0, Math.max(...j.lines.map(l => j.font.widthOfTextAtSize(l, j.size)))) : j.bk.x1 - j.bk.x0;
     j.lines.forEach((ln, i) => {
       const lw = j.font.widthOfTextAtSize(ln, j.size);
-      const x = j.bk.align === 'center' ? (j.bk.x0 + j.bk.x1 - lw) / 2 : j.bk.x0;
-      j.page.drawText(ln, { x, y: y0 - i * j.lineH, size: j.size, font: j.font, color: rgb(j.bk.color) });
+      const put = (x, t) => j.page.drawText(t, { x, y: y0 - i * j.lineH, size: j.size, font: j.font, color: rgb(j.bk.color) });
+      if (j.bk.align === 'center') { put((j.bk.x0 + j.bk.x1 - lw) / 2, ln); return; }
+      if (j.bk.align === 'right') { put(j.bk.x1 - lw, ln); return; }
+      // justificado: reparte el espacio sobrante entre palabras para cuadrar el ancho del bloque
+      if (j.bk.justify && i < j.lines.length - 1) {
+        const words = ln.split(' ');
+        if (words.length > 1) {
+          const gap = j.font.widthOfTextAtSize(' ', j.size) + (full - lw) / (words.length - 1);
+          if (gap > 0 && gap < j.size * 0.55) {
+            let x = j.bk.x0;
+            words.forEach((wd, k) => { put(x, wd); x += j.font.widthOfTextAtSize(wd, j.size) + (k < words.length - 1 ? gap : 0); });
+            return;
+          }
+        }
+      }
+      put(j.bk.x0, ln);
     });
   }
   return new Blob([await doc.save()], { type: 'application/pdf' });
