@@ -2411,6 +2411,7 @@ async function camOcr() {
 async function camRun(ocr) {
   if (docBusy) { toast('Espera a que termine lo que se está traduciendo'); return; }
   const ctrl = new AbortController(); camState.ctrl = ctrl;
+  let phase = 'leer'; // separo el fallo de leer la foto del fallo de traducir
   docBusy = true; camButtons(false);
   let lock = null; try { lock = await navigator.wakeLock?.request('screen'); } catch {}
   try {
@@ -2423,6 +2424,7 @@ async function camRun(ocr) {
         setCamBar(0); return;
       }
     }
+    phase = 'traducir';
     if (!state.ready && state.loading) {
       renderCamTexts(); cel.status.textContent = 'Texto leído. El traductor se está abriendo, vuelve a pulsar en un segundo.'; setCamBar(100); return;
     }
@@ -2458,7 +2460,17 @@ async function camRun(ocr) {
     cel.status.textContent = `Listo · ${camState.blocks.length} texto${camState.blocks.length > 1 ? 's' : ''} traducido${camState.blocks.length > 1 ? 's' : ''} al ${L[tgt].name.toLowerCase()}`;
   } catch (e) {
     if (e?.name === 'AbortError') cel.status.textContent = 'Detenido';
-    else { console.error(e); cel.status.textContent = 'Algo falló al leer la foto'; toast(navigator.onLine ? 'Algo falló al leer la foto' : 'La primera vez necesito internet para descargar el lector de texto'); }
+    else {
+      console.error(e);
+      const why = String(e?.message || e?.name || e || '').replace(/\s+/g, ' ').slice(0, 70);
+      if (phase === 'traducir') {
+        cel.status.textContent = 'Algo falló al traducir. Prueba otra vez.';
+        toast(why ? `Algo falló al traducir (${why}). Prueba otra vez.` : 'Algo falló al traducir. Prueba otra vez.');
+      } else {
+        cel.status.textContent = 'Algo falló al leer la foto';
+        toast(navigator.onLine ? (why ? `Algo falló al leer la foto (${why})` : 'Algo falló al leer la foto') : 'La primera vez necesito internet para descargar el lector de texto');
+      }
+    }
     cel.eta.textContent = '';
   } finally {
     docBusy = false; camState.ctrl = null; camButtons(true);
