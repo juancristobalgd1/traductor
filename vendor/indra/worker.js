@@ -1,7 +1,11 @@
 // Web worker: loads the models once and OCRs grayscale pages posted to it,
 // so the page stays responsive while ONNX Runtime runs.
 const post = (p) => self.postMessage({ type: "progress", name: "boot", ...p });
-post({ state: "boot", v: "w46", isolated: !!self.crossOriginIsolated, cores: navigator.hardwareConcurrency || 1 });
+post({ state: "boot", v: "w47", isolated: !!self.crossOriginIsolated, cores: navigator.hardwareConcurrency || 1 });
+// Los mensajes que llegan mientras el módulo aún se importa se guardan y se
+// reprocesan al terminar: el arranque ("init") llega antes de que el receptor esté montado.
+const tempranos = [];
+self.onmessage = ({ data }) => tempranos.push(data);
 
 let ort, IndraOCR, cachedLoader;
 try {
@@ -25,7 +29,7 @@ self.addEventListener("unhandledrejection", (e) => post({ state: "boot-error", m
 
 let ready = null;
 
-self.onmessage = async ({ data: msg }) => {
+const atiende = async ({ data: msg }) => {
   try {
     if (msg.type === "init") {
       post({ state: "init" });
@@ -47,3 +51,6 @@ self.onmessage = async ({ data: msg }) => {
     self.postMessage({ type: "error", id: msg.id, error: String(e?.message ?? e) });
   }
 };
+
+self.onmessage = atiende;
+for (const m of tempranos.splice(0)) atiende({ data: m });
