@@ -2396,6 +2396,14 @@ async function camImage(file) {
    descargan una vez y quedan en la caché del navegador. */
 const INDRA_LANGS = new Set([...LATIN, 'ru', 'uk', 'kk', 'mn', 'hi', 'mr', 'bn', 'zh', 'zh-Hant', 'yue', 'ja']);
 let indraW = null;
+let dbgElRef = null;
+const dbg = m => {
+  try {
+    if (!dbgElRef) { dbgElRef = document.createElement('div'); dbgElRef.id = 'dbg'; dbgElRef.style.cssText = 'position:fixed;left:4px;bottom:4px;z-index:9999;display:none;font:10px monospace;color:#0f0;background:#000c;padding:4px;white-space:pre-wrap;max-width:90vw'; document.body.appendChild(dbgElRef); }
+    dbgElRef.textContent = ((dbgElRef.textContent ? dbgElRef.textContent + '\n' : '') + new Date().toISOString().slice(11, 19) + ' ' + m).split('\n').slice(-16).join('\n');
+  } catch {}
+};
+let indraDied = null, indraDiedNo = null;
 async function getIndra() {
   if (indraW) return indraW;
   cel.status.textContent = 'Descargando el lector de texto…'; setCamBar(0);
@@ -2405,21 +2413,28 @@ async function getIndra() {
   const dead = new Promise((_, no) => setTimeout(() => { if (!last || Date.now() - last > 89000) no(new Error('el lector no responde')); }, 90000));
   let boomNo;
   const boom = new Promise((_, no) => { boomNo = no; });
+  indraDied = new Promise((_, no) => { indraDiedNo = no; });
   indraW = new Indra({
     onProgress: p => {
       tick();
-      if (p.state === 'boot') { console.log('lector: boot, aislado:', p.isolated, 'núcleos:', p.cores); cel.status.textContent = 'Arrancando el lector…'; }
-      else if (p.state === 'ort' || p.state === 'modules') { cel.status.textContent = 'Cargando el lector…'; }
-      else if (p.state === 'boot-error') { console.error('arranque del lector:', p.message); boomNo(new Error(p.message || 'error de arranque')); }
+      if (p.state === 'boot') { dbg(`boot aislado=${p.isolated} núcleos=${p.cores}`); console.log('lector: boot, aislado:', p.isolated, 'núcleos:', p.cores); cel.status.textContent = 'Arrancando el lector…'; }
+      else if (p.state === 'ort' || p.state === 'modules') { dbg('cargando runtime'); cel.status.textContent = 'Cargando el lector…'; }
+      else if (p.state === 'boot-error') { dbg('boot-error: ' + p.message); console.error('arranque del lector:', p.message); boomNo(new Error(p.message || 'error de arranque')); }
       else if (p.state === 'progress') {
         cel.status.textContent = `Descargando el lector de texto… ${(p.loaded / 1e6).toFixed(0)} de ~${Math.round(p.total / 1e6)} MB`;
         setCamBar(Math.min(30, p.loaded / p.total * 30));
-      } else if (p.state === 'ready') setCamBar(30);
+      } else if (p.state === 'ready') { dbg('lector listo'); setCamBar(30); }
+      else dbg('onProgress: ' + JSON.stringify(p).slice(0, 140));
     },
   });
-  indraW.worker.addEventListener('error', e => boomNo(new Error(`el lector no arrancó: ${e.message || '(sin mensaje)'} @ ${e.filename || '?'}:${e.lineno || '?'}`)));
+  indraW.worker.addEventListener('error', e => {
+    const msg = `el lector no arrancó: ${e.message || '(sin mensaje)'} @ ${e.filename || '?'}:${e.lineno || '?'}`;
+    dbg(msg); try { indraW?.worker.terminate(); } catch {} indraW = null;
+    if (indraDiedNo) indraDiedNo(new Error('el lector ha muerto')); else boomNo(new Error(msg));
+  });
   indraW.worker.addEventListener('messageerror', () => boomNo(new Error('el lector no arrancó: mensaje ilegal')));
   await Promise.race([indraW.ready, dead, boom]);
+  boom.catch(() => {});
   tick();
   return indraW;
 }
@@ -2434,6 +2449,7 @@ function grayOf(c) {
   return { data: out, width: c.width, height: c.height };
 }
 async function tesseractOcr(chosen, fbLang) {
+  dbg('lectura con la reserva (Tesseract)…');
   const src = camState.src;
   const img = src.getContext('2d').getImageData(0, 0, src.width, src.height);
   const l = chosen || fbLang;
@@ -2455,6 +2471,7 @@ async function camOcr(ctrl) {
   const src = camState.src;
   const img = src.getContext('2d').getImageData(0, 0, src.width, src.height);
   const chosen = state.src !== 'auto' ? state.src : null;
+  dbg('foto: ' + (chosen ? 'idioma ' + chosen : 'auto') + ', ' + src.width + 'x' + src.height);
   // "Detener" debe cortar también mientras descarga o lee, no solo entre pasos.
   const stopP = new Promise((_, no) => ctrl.signal.addEventListener('abort', () => no(stopErr()), { once: true }));
   const kill = () => { // termina el lector por dentro: la descarga y la lectura se cortan al momento
@@ -2467,8 +2484,11 @@ async function camOcr(ctrl) {
   try {
     const w = await guard(getIndra());
     cel.status.textContent = 'Leyendo el texto…'; setCamBar(30);
-    const page = await guard(w.page(grayOf(src), { turn: true, tables: false }));
+    dbg('leyendo con Indra…');
+    const pageDead = new Promise((_, no) => setTimeout(() => no(new Error('la lectura se queda sin responder')), 90000));
+    const page = await guard(Promise.race([w.page(grayOf(src), { turn: true, tables: false }), pageDead, indraDied]));
     setCamBar(100);
+    dbg('página leída en ' + ((page.timings && page.timings.total_ms) || '?') + ' ms');
     // Adapto las líneas de Indra a la misma forma que usa Tesseract para reaprovechar el agrupado.
     const flat = page.lines.filter(l => l.text.trim() && l.conf > 0.3)
       .map(l => ({ text: l.text, confidence: l.conf * 100, bbox: { x0: l.box[0], y0: l.box[1], x1: l.box[2], y1: l.box[3] } }));
@@ -2481,6 +2501,7 @@ async function camOcr(ctrl) {
     return blocks;
   } catch (e) {
     if (e?.name === 'AbortError') throw e;
+    dbg('fallo del lector: ' + (e?.message || e));
     console.warn('Indra no pudo leer la foto, repito con Tesseract', e);
     toast('El lector rápido no ha cargado, uso el lector de reserva');
     return guard(tesseractOcr(null, lang && TESS[lang] ? lang : null));
