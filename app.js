@@ -2671,6 +2671,32 @@ cel.copy.addEventListener('click', async () => {
   const t = camState.blocks.map(b => b.tr || b.text).join('\n\n');
   try { await navigator.clipboard.writeText(t); flashLabel(cel.copy, 'Copiado'); } catch { toast('No pude copiar'); }
 });
+/* Visor: toca la imagen y se abre en grande para leerla bien. */
+(() => {
+  const box = document.getElementById('imgViewer');
+  if (!box) return;
+  const img = box.querySelector('img');
+  let url = null;
+  const open = () => {
+    if (!camState.src) return;
+    cel.canvas.toBlob(b => {
+      if (!b) return;
+      if (url) URL.revokeObjectURL(url);
+      url = URL.createObjectURL(b);
+      img.src = url; box.hidden = false;
+      document.body.classList.add('lock');
+    }, 'image/jpeg', 0.92);
+  };
+  const shut = () => {
+    if (box.hidden) return;
+    box.hidden = true; document.body.classList.remove('lock');
+    img.src = ''; if (url) { URL.revokeObjectURL(url); url = null; }
+  };
+  cel.canvas.addEventListener('click', open);
+  box.querySelector('.iv-close').addEventListener('click', shut);
+  box.addEventListener('click', e => { if (e.target === box || e.target.classList.contains('iv-body')) shut(); });
+  addEventListener('keydown', e => { if (e.key === 'Escape') shut(); });
+})();
 cel.start.addEventListener('dragover', e => { e.preventDefault(); cel.start.classList.add('over'); });
 cel.start.addEventListener('dragleave', () => cel.start.classList.remove('over'));
 cel.start.addEventListener('drop', e => { e.preventDefault(); e.stopPropagation(); cel.start.classList.remove('over'); camImage(e.dataTransfer.files[0]); });

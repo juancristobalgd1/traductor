@@ -280,12 +280,12 @@ textarea::placeholder{color:var(--faint)}
 .cam-btns{display:flex;gap:8px;margin-top:18px;width:100%;max-width:320px}
 .cam-btns button{flex:1}
 .cam-stage{position:relative;line-height:0}
-.cam-stage canvas{width:100%;height:auto;display:block;border-radius:var(--r-md);background:var(--surface)}
+.cam-stage canvas{width:100%;height:auto;display:block;border-radius:var(--r-md);background:var(--surface);cursor:zoom-in}
 .cam-view{position:static;display:flex;width:max-content;margin:12px auto 0;padding:3px;background:var(--surface);border-radius:var(--r-sm);line-height:normal;box-shadow:none;transform:none}
 .cam-view button{height:30px;padding:0 14px;border-radius:7px;font-size:13.5px;font-weight:500;color:var(--muted);background:none;transition:background var(--fast),color var(--fast)}
 .cam-view button.sel{background:var(--card);color:var(--text);font-weight:600;box-shadow:0 1px 2px rgba(0,0,0,.08)}
 @media (prefers-color-scheme:dark){.cam-view button.sel{background:var(--surface-2)}}
-.cam-texts{display:flex;flex-direction:column;gap:12px;max-height:320px;overflow:auto;overscroll-behavior:contain;border-radius:var(--r-md);padding:14px 16px;background:var(--surface)}
+.cam-texts{display:flex;flex-direction:column;gap:12px;border-radius:var(--r-md);padding:14px 16px;background:var(--surface)}
 .cam-texts div{font-size:15px;line-height:1.5;overflow-wrap:anywhere}
 .cam-texts div+div{padding-top:12px;border-top:1px solid var(--border)}
 .cam-texts small{display:block;color:var(--faint);font-size:13px;margin-bottom:2px}
@@ -557,3 +557,12 @@ textarea:focus::placeholder{opacity:.55}
 .gloss-add span{color:var(--faint)}
 .gloss-add button{display:grid;place-items:center;width:38px;height:38px;flex:none;border-radius:50%;background:var(--accent);color:#fff}
 @media (prefers-reduced-motion:reduce){.gloss summary .chev{transition:none}}
+
+/* Visor de la imagen ampliada: toca la foto y se abre en grande, con Cerrar. */
+.img-viewer{position:fixed;inset:0;z-index:70;display:flex;flex-direction:column;background:rgba(10,10,12,.96);animation:fadein .18s var(--ease)}
+.iv-head{display:flex;justify-content:flex-end;padding:calc(10px + env(safe-area-inset-top)) 12px 10px}
+.iv-close{display:flex;align-items:center;gap:8px;height:40px;padding:0 16px;border-radius:999px;background:rgba(255,255,255,.14);color:#fff;font-weight:600;font-size:15px;transition:background var(--fast)}
+.iv-close:active{background:rgba(255,255,255,.22)}
+.iv-close svg{width:16px;height:16px;fill:none;stroke:#fff;stroke-width:2.2;stroke-linecap:round}
+.iv-body{flex:1;min-height:0;overflow:auto;-webkit-overflow-scrolling:touch;padding:0 10px calc(20px + env(safe-area-inset-bottom))}
+.iv-body img{width:100%;height:auto;display:block;border-radius:12px}

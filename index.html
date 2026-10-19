@@ -262,6 +262,10 @@
 </div>
 
 <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
-<script type="module" src="app.js?v=28"></script>
+<script type="module" src="app.js?v=29"></script>
+  <div class="img-viewer" id="imgViewer" hidden role="dialog" aria-modal="true" aria-label="Imagen ampliada">
+    <div class="iv-head"><button class="iv-close" id="ivClose" type="button">Cerrar<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+    <div class="iv-body"><img id="ivImg" alt="Foto ampliada con la traducción" draggable="false"></div>
+  </div>
 </body>
 </html>
