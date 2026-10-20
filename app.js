@@ -443,7 +443,7 @@ async function loadModel() {
     if (fromCache || loaded >= total) show(fromCache ? 'Abriendo el traductor…' : 'Preparando el traductor…', fromCache ? 'Ya está guardado en tu dispositivo' : 'Guardándolo y cargándolo en memoria', 100);
     else show('Descargando modelo…', `${gb(loaded)} de ${gb(total)} GB${eta > 2 ? ` · faltan ~${eta > 90 ? Math.round(eta / 60) + ' min' : eta + ' s'}` : ''}`, pct);
   };
-  const base = { n_ctx: 4096, n_batch: 512, progressCallback, useCache: true };
+  const base = { n_ctx: 4096, n_batch: 512, jinja: true, progressCallback, useCache: true };
   const pref = store.get('engine', 'auto');          // auto | cpu | gpu
   const gpuBroken = store.get('gpuBroken', false);   // en este dispositivo la GPU traduce mal
   if (wllama) { const w = wllama; wllama = null; await Promise.race([w.exit().catch(() => {}), new Promise(r => setTimeout(r, 1500))]); }
